@@ -258,6 +258,7 @@ let state = {
   userFilterPicks: 'all',    // 'all'|'in'|'none'
   userFilterPayment: 'all',  // 'all'|'unpaid'|'paid'
   participantSearch: '',
+  participantFilterPicks: 'all',  // 'all'|'in'|'none'
   // Golfer management
   golfers: [...SALARY_DATA],   // editable copy
   golferSearch: '',
@@ -896,9 +897,9 @@ function renderAdminParticipants() {
 
   const pickCount=state.participants.filter(p=>(p.picks||[]).some(x=>x&&x.trim())).length;
 
-  h+=`<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+  h+=`<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">
     <div class="info-banner" style="margin-bottom:0;flex:1">${pickCount} of ${state.participants.length} participants have picks submitted.</div>
-    <div style="display:flex;gap:8px;flex-shrink:0">
+    <div style="display:flex;gap:8px;flex-shrink:0;flex-wrap:wrap">
       <input type="text" placeholder="&#128269; Filter participants..." value="${state.participantSearch}"
         id="participantSearchInput"
         oninput="state.participantSearch=this.value;renderTableOnly()"
@@ -911,16 +912,29 @@ function renderAdminParticipants() {
     </div>
   </div>
 
+  <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+    <span style="font-size:12px;color:#666">Show:</span>
+    ${['all','in','none'].map(f=>`<button onclick="state.participantFilterPicks='${f}';renderTableOnly()"
+      style="font-size:12px;padding:4px 12px;border-radius:20px;border:0.5px solid rgba(0,0,0,0.2);cursor:pointer;font-family:Georgia,serif;
+        background:${state.participantFilterPicks===f?'#006B3F':'transparent'};
+        color:${state.participantFilterPicks===f?'#fff':'#444'}">${
+          f==='all'?'All Participants':f==='in'?'&#10003; Picks Submitted':'&#10007; No Picks Yet'
+        }</button>`).join('')}
+  </div>
+
   <div style="font-size:11px;color:#aaa;margin-bottom:10px;line-height:1.6">
     <strong style="color:#666">Import format:</strong> CSV with columns <code style="background:#f0f0f0;padding:1px 5px;border-radius:3px">Name,Pick1,Pick2,Pick3,Pick4,Pick5,Pick6</code>. Use Export to get the correct format.
   </div>
 
   <div class="participant-grid">`;
 
-  const filteredParts = state.participants.filter(p=>
-    !state.participantSearch ||
-    p.name.toLowerCase().includes(state.participantSearch.toLowerCase())
-  );
+  const filteredParts = state.participants.filter(p=>{
+    const hasPicks = (p.picks||[]).some(x=>x&&x.trim());
+    if(state.participantSearch && !p.name.toLowerCase().includes(state.participantSearch.toLowerCase())) return false;
+    if(state.participantFilterPicks==='in' && !hasPicks) return false;
+    if(state.participantFilterPicks==='none' && hasPicks) return false;
+    return true;
+  });
 
   filteredParts.forEach(p=>{
     const picks=(p.picks||[]).filter(x=>x&&x.trim());
