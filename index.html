@@ -422,39 +422,90 @@ function buildNameMap(espnNames) {
 
 async function fetchScores() {
   state.scoresLoading=true; state.scoresError=null; render();
+
+  // Try the 2026 Masters event ID first, then fall back to querying the live leaderboard
+  const URLS = [
+    'https://site.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard?event=401703519',
+    'https://site.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard',
+  ];
+
+  let data = null;
+  for (const url of URLS) {
+    try {
+      const res = await fetch(url, {cache:'no-store'});
+      if (!res.ok) continue;
+      const d = await res.json();
+      // Accept if it looks like Masters data (name check)
+      const evtName = d?.events?.[0]?.name || '';
+      if (d?.events?.length && (evtName.toLowerCase().includes('master') || URLS.indexOf(url)===0)) {
+        data = d; break;
+      }
+    } catch(e) { continue; }
+  }
+
+  if (!data) {
+    state.scoresError = 'Could not load live scores.';
+    state.scoresLoading = false; render(); return;
+  }
+
   try {
-    const res=await fetch('https://site.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard?event=401580365');
-    const data=await res.json();
     const newScores={};
     const comps=data?.events?.[0]?.competitions?.[0]?.competitors||[];
     const espnNames = comps.map(c=>c.athlete?.displayName||'').filter(Boolean);
-
-    // Build name mapping each time scores refresh
     buildNameMap(espnNames);
 
     comps.forEach(c=>{
       const espnName=c.athlete?.displayName||'';
+      if(!espnName) return;
+
+      // Total to-par score
       const scoreStr=c.score?.displayValue||'E';
-      const cut=c.status?.type?.id==='6';
+      const cut=c.status?.type?.id==='6'||c.status?.type?.name==='STATUS_CUT';
       let toPar=0;
-      if(scoreStr!=='E'&&scoreStr!=='--'){const n=parseInt(scoreStr);toPar=isNaN(n)?0:n;}
-      // Today's round score from linescores (last active round)
+      if(scoreStr!=='E'&&scoreStr!=='--'&&scoreStr!==''){
+        const n=parseInt(scoreStr); toPar=isNaN(n)?0:n;
+      }
+
+      // Today's score — use the active/current round linescore
       let today=null;
       const lines=c.linescores||[];
-      if(lines.length>0){
-        const last=lines[lines.length-1];
-        const v=last?.displayValue;
-        if(v&&v!=='E'&&v!=='--'){const n=parseInt(v);if(!isNaN(n))today=n;}
-        else if(v==='E') today=0;
+      // Find the last round with actual data (not '--')
+      for(let i=lines.length-1;i>=0;i--){
+        const v=lines[i]?.displayValue;
+        if(v&&v!=='--'){
+          if(v==='E') today=0;
+          else{const n=parseInt(v);if(!isNaN(n)) today=n;}
+          break;
+        }
       }
-      const entry={toPar,cut,thru:c.status?.displayValue||'',today,espnName};
-      // Store under both ESPN name and resolved salary name
+
+      // Thru — prefer statistics field, fall back to status display
+      let thru='';
+      const stats=c.statistics||[];
+      const thruStat=stats.find(s=>s.name==='thru'||s.abbreviation==='THRU');
+      if(thruStat?.displayValue&&thruStat.displayValue!=='--') {
+        thru=thruStat.displayValue==='18'?'F':thruStat.displayValue;
+      } else {
+        const sd=c.status?.displayValue||'';
+        // Clean up ESPN status strings for display
+        if(sd==='F'||sd==='Finished'||sd==='Complete') thru='F';
+        else if(/^\d+$/.test(sd)) thru=sd;
+        else if(sd.toLowerCase().includes('tee')||sd.toLowerCase().includes('not')) thru='*';
+        else thru=sd;
+      }
+
+      const entry={toPar,cut,thru,today,espnName};
       newScores[espnName] = entry;
       const salaryName = espnToSalary[espnName];
       if(salaryName && salaryName !== espnName) newScores[salaryName] = entry;
     });
-    state.scores=newScores; state.lastFetched=new Date();
-  } catch(e){state.scoresError='Could not load live scores.';}
+
+    if(Object.keys(newScores).length > 0) {
+      state.scores=newScores; state.lastFetched=new Date();
+    } else {
+      state.scoresError='Scores not yet available — tournament may not have started.';
+    }
+  } catch(e){ state.scoresError='Error parsing scores data.'; }
   state.scoresLoading=false; render();
 }
 
@@ -1803,11 +1854,11 @@ async function doImportPicks() {
   function _play(){
     if(_done)return; _done=true;
     var a=new Audio(_src);
-    a.volume=0.0141;
+    a.volume=0.00987;
     a.play().catch(function(){_done=false;});
     var iv=setInterval(function(){
       var t=a.currentTime;
-      if(t>=8)a.volume=Math.max(0,0.0141*(1-(t-8)/2));
+      if(t>=8)a.volume=Math.max(0,0.00987*(1-(t-8)/2));
       if(t>=10){a.pause();clearInterval(iv);}
     },80);
   }
