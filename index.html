@@ -257,6 +257,7 @@ let state = {
   // Admin
   adminLoggedIn: false, adminPass: '', adminPassError: '',
   adminSubTab: 'participants',
+  insights: [],   // accumulated insight cards
   editingParticipant: null, editPicks: ['','','','','',''],
   addUserName: '', addUserEmail: '', addUserError: '', addUserSuccess: '',
   deleteConfirmName: null,
@@ -422,104 +423,40 @@ function buildNameMap(espnNames) {
 
 async function fetchScores() {
   state.scoresLoading=true; state.scoresError=null; render();
-
-  // Masters.com official JSON feed — CORS-open, no API key needed
-  // Falls back to ESPN if masters.com fails
-  const ENDPOINTS = [
-    { url:'https://www.masters.com/api/leaderboard/leaderboard.json', parser: parseMasters },
-    { url:'https://www.masters.com/api/scores/leaderboard.json',      parser: parseMasters },
-    { url:'https://www.masters.com/en_US/scores/feeds/2026/scores.json', parser: parseMasters },
-    { url:'https://site.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard?event=401811941', parser: parseESPN },
-    { url:'https://site.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard?event=401580365', parser: parseESPN },
-  ];
-
-  function parseMasters(data) {
-    // masters.com feed format: data.player[] or data.leaderboard[]
-    const players = data?.data?.player || data?.player || data?.leaderboard || [];
-    if (!players.length) return null;
-    const newScores = {};
-    players.forEach(p => {
-      const name = (p.full_name||p.name||'').trim();
-      if (!name) return;
-      const toParRaw = p.topar ?? p.toPar ?? p.total ?? p.score ?? 0;
-      const toPar = typeof toParRaw === 'string'
-        ? (toParRaw==='E'||toParRaw===''? 0 : parseInt(toParRaw)||0)
-        : (toParRaw||0);
-      const todayRaw = p.today ?? p.round_score ?? null;
-      const today = todayRaw==null ? null
-        : typeof todayRaw==='string'
-          ? (todayRaw==='E'? 0 : parseInt(todayRaw)||null)
-          : todayRaw;
-      const thruRaw = p.thru ?? p.hole ?? '';
-      const thru = String(thruRaw==='18'||thruRaw===18?'F':thruRaw||'');
-      const cut = !!(p.status==='C'||p.cut||p.missed_cut);
-      const entry = {toPar, cut, thru, today, espnName:name};
-      newScores[name] = entry;
-      const salaryName = espnToSalary[name];
-      if (salaryName && salaryName !== name) newScores[salaryName] = entry;
-    });
-    return Object.keys(newScores).length ? newScores : null;
-  }
-
-  function parseESPN(data) {
-    const comps = data?.events?.[0]?.competitions?.[0]?.competitors||[];
-    if (!comps.length) return null;
+  try {
+    const res=await fetch('https://site.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard?event=401580365');
+    const data=await res.json();
+    const newScores={};
+    const comps=data?.events?.[0]?.competitions?.[0]?.competitors||[];
     const espnNames = comps.map(c=>c.athlete?.displayName||'').filter(Boolean);
+
+    // Build name mapping each time scores refresh
     buildNameMap(espnNames);
-    const newScores = {};
+
     comps.forEach(c=>{
-      const espnName = c.athlete?.displayName||'';
-      if (!espnName) return;
-      const scoreStr = c.score?.displayValue||'E';
-      const cut = c.status?.type?.id==='6'||c.status?.type?.name==='STATUS_CUT';
-      let toPar = 0;
-      if (scoreStr!=='E'&&scoreStr!=='--'&&scoreStr!=='') {
-        const n=parseInt(scoreStr); toPar=isNaN(n)?0:n;
+      const espnName=c.athlete?.displayName||'';
+      const scoreStr=c.score?.displayValue||'E';
+      const cut=c.status?.type?.id==='6';
+      let toPar=0;
+      if(scoreStr!=='E'&&scoreStr!=='--'){const n=parseInt(scoreStr);toPar=isNaN(n)?0:n;}
+      // Today's round score from linescores (last active round)
+      let today=null;
+      const lines=c.linescores||[];
+      if(lines.length>0){
+        const last=lines[lines.length-1];
+        const v=last?.displayValue;
+        if(v&&v!=='E'&&v!=='--'){const n=parseInt(v);if(!isNaN(n))today=n;}
+        else if(v==='E') today=0;
       }
-      let today = null;
-      const lines = c.linescores||[];
-      for (let i=lines.length-1;i>=0;i--) {
-        const v=lines[i]?.displayValue;
-        if (v&&v!=='--') {
-          if (v==='E') today=0;
-          else { const n=parseInt(v); if(!isNaN(n)) today=n; }
-          break;
-        }
-      }
-      const sd = c.status?.displayValue||'';
-      const thru = sd==='F'||sd==='Final'?'F': /^\d+$/.test(sd)?sd:sd;
-      const entry = {toPar,cut,thru,today,espnName};
+      const entry={toPar,cut,thru:c.status?.displayValue||'',today,espnName};
+      // Store under both ESPN name and resolved salary name
       newScores[espnName] = entry;
       const salaryName = espnToSalary[espnName];
-      if (salaryName && salaryName!==espnName) newScores[salaryName] = entry;
+      if(salaryName && salaryName !== espnName) newScores[salaryName] = entry;
     });
-    return Object.keys(newScores).length ? newScores : null;
-  }
-
-  let lastErr = '';
-  for (const ep of ENDPOINTS) {
-    try {
-      const res = await fetch(ep.url, {cache:'no-store', mode:'cors'});
-      if (!res.ok) { lastErr=`HTTP ${res.status} from ${ep.url}`; continue; }
-      const data = await res.json();
-      const scores = ep.parser(data);
-      if (scores) {
-        buildNameMap(Object.keys(scores));
-        state.scores = scores;
-        state.lastFetched = new Date();
-        state.scoresLoading = false;
-        render();
-        return;
-      }
-      lastErr = `Empty data from ${ep.url}`;
-    } catch(e) {
-      lastErr = `${e.message} (${ep.url})`;
-      console.warn('fetchScores failed for', ep.url, e);
-    }
-  }
-  state.scoresError = 'Could not load scores. '+lastErr;
-  state.scoresLoading = false;
-  render();
+    state.scores=newScores; state.lastFetched=new Date();
+  } catch(e){state.scoresError='Could not load live scores.';}
+  state.scoresLoading=false; render();
 }
 
 // ── Render helpers ────────────────────────────────────────
@@ -647,7 +584,7 @@ function renderLeaderboard() {
 
 // ── Render: Golfers ───────────────────────────────────────
 function renderGolfers() {
-  if(!Object.keys(state.scores).length) return `<div class="card"><div class="empty-state">${state.scoresError?state.scoresError:'No scores loaded yet.'}<br><button class="btn btn-primary" style="margin-top:12px" onclick="fetchScores()">⟳ Load Live Scores</button></div></div>`;
+  if(!Object.keys(state.scores).length) return `<div class="card"><div class="empty-state">No scores loaded.<br><button class="btn btn-primary" style="margin-top:12px" onclick="fetchScores()">Load Live Scores</button></div></div>`;
 
   // Deduplicate: only keep ESPN names (each golfer once, highest-priority entry)
   const seen=new Set();
@@ -851,13 +788,14 @@ function renderAdmin() {
   const sub=state.adminSubTab;
   let h=`<div class="admin-panel">
   <div style="display:flex;gap:6px;margin-bottom:12px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px">
-    ${[['participants','Participants'],['golfers','Salaries'],['settings','Settings']].map(([t,l])=>`
+    ${[['participants','Participants'],['golfers','Salaries'],['settings','Settings'],['insights','📊 Insights']].map(([t,l])=>`
       <button class="btn ${sub===t?'btn-primary':'btn-secondary'}" style="font-size:13px;padding:8px 14px;white-space:nowrap;flex-shrink:0" onclick="state.adminSubTab='${t}';state.editingParticipant=null;render()">${l}</button>
     `).join('')}
     <button class="btn btn-secondary" style="font-size:13px;padding:8px 14px;flex-shrink:0;color:#C0392B;margin-left:auto;white-space:nowrap" onclick="state.adminLoggedIn=false;render()">Sign Out</button>
   </div>`;
   if(sub==='settings') h+=renderAdminSettings();
   else if(sub==='golfers') h+=renderGolferManager();
+  else if(sub==='insights') h+=renderInsights();
   else h+=renderParticipants();
   return h+'</div>';
 }
@@ -878,6 +816,405 @@ function renderAdminSettings() {
     </div>
     <p style="font-size:12px;color:#aaa;margin-top:8px">Changes take effect immediately for all participants.</p>
   </div>`;
+}
+
+// ── Render: Insights ──────────────────────────────────────
+function renderInsights() {
+  const ps = state.participants;
+  const hasScores = Object.keys(state.scores).length > 0;
+
+  // Summary stats bar at top
+  const totalPax = ps.length;
+  const withPicks = ps.filter(p=>(p.picks||[]).filter(x=>x).length===6).length;
+  const paid = ps.filter(p=>p.payment_method).length;
+  const pot = paid * 50;
+
+  let h = `<div>
+  <!-- Summary stats -->
+  <div class="stats-row" style="grid-template-columns:repeat(4,1fr);margin-bottom:0.75rem">
+    <div class="stat-card"><div class="stat-val">${totalPax}</div><div class="stat-lbl">Participants</div></div>
+    <div class="stat-card"><div class="stat-val">${withPicks}</div><div class="stat-lbl">Full Picks In</div></div>
+    <div class="stat-card"><div class="stat-val">${paid}</div><div class="stat-lbl">Paid</div></div>
+    <div class="stat-card"><div class="stat-val" style="color:#006B3F">$${pot}</div><div class="stat-lbl">Pot Size</div></div>
+  </div>
+
+  <!-- Generate button + export all -->
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+    <button class="btn btn-primary" style="font-size:14px;padding:10px 20px" onclick="generateInsight()">✦ Generate Next Insight</button>
+    ${state.insights.length>0?`<button class="btn btn-secondary" style="font-size:13px;padding:9px 16px" onclick="exportInsights()">⬇ Export All (${state.insights.length})</button>`:''}
+    ${state.insights.length>0?`<button class="btn btn-secondary" style="font-size:13px;padding:9px 16px;color:#C0392B" onclick="state.insights=[];render()">✕ Clear All</button>`:''}
+  </div>
+  ${state.insights.length===0?`<div style="font-size:14px;color:#aaa;padding:24px;text-align:center;border:1px dashed #ddd;border-radius:8px">Click <strong>Generate Next Insight</strong> to analyse participant data${hasScores?'':' (load live scores for performance insights)'}.</div>`:''}
+  <!-- Insight cards (newest first) -->
+  ${[...state.insights].reverse().map((ins,i)=>`
+  <div class="card" style="margin-bottom:10px;position:relative">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px">
+      <div style="font-size:11px;font-weight:600;color:#006B3F;letter-spacing:.5px;text-transform:uppercase">${ins.category}</div>
+      <div style="display:flex;gap:6px;flex-shrink:0">
+        <button style="font-size:11px;padding:3px 10px;border:0.5px solid rgba(0,0,0,0.18);border-radius:4px;cursor:pointer;background:transparent;color:#555" onclick="copyInsight(${state.insights.length-1-i})">Copy</button>
+        <button style="font-size:11px;padding:3px 8px;border:0.5px solid rgba(0,0,0,0.12);border-radius:4px;cursor:pointer;background:transparent;color:#aaa" onclick="state.insights.splice(${state.insights.length-1-i},1);render()">✕</button>
+      </div>
+    </div>
+    <div style="font-size:15px;font-weight:500;margin-bottom:6px">${ins.headline}</div>
+    <div style="font-size:13px;color:#444;line-height:1.6">${ins.body}</div>
+    ${ins.table?`<div style="margin-top:10px;overflow-x:auto">${ins.table}</div>`:''}
+    <div style="font-size:11px;color:#bbb;margin-top:10px">${ins.ts}</div>
+  </div>`).join('')}
+  </div>`;
+  return h;
+}
+
+function copyInsight(idx) {
+  const ins = state.insights[idx];
+  const txt = `[${ins.category}] ${ins.headline}\n\n${ins.body}${ins.tableText?'\n\n'+ins.tableText:''}`;
+  navigator.clipboard.writeText(txt).catch(()=>{});
+  // Brief flash feedback
+  const btns = document.querySelectorAll('.card button');
+  btns.forEach(b=>{ if(b.textContent==='Copy'&&b.onclick?.toString().includes(`(${idx})`)) { b.textContent='✓ Copied'; setTimeout(()=>b.textContent='Copy',1500); }});
+}
+
+function exportInsights() {
+  const lines = state.insights.map((ins,i)=>
+    `=== INSIGHT ${i+1}: ${ins.category} ===\n${ins.headline}\n\n${ins.body}${ins.tableText?'\n\n'+ins.tableText:''}\n[${ins.ts}]`
+  ).join('\n\n────────────────────────────────────\n\n');
+  const blob = new Blob([lines], {type:'text/plain'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `masters-insights-${new Date().toISOString().slice(0,10)}.txt`;
+  a.click();
+}
+
+// Insight generator — cycles through analytical topics
+function generateInsight() {
+  const ps = state.participants;
+  const hasScores = Object.keys(state.scores).length > 0;
+  const ts = new Date().toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+
+  // All possible generators — skip ones that need scores if unavailable
+  const generators = [
+    insPopularPicks, insPickConcentration, insSalaryBreakdown, insUniquePicks,
+    insPaymentStatus, insPicksCompletion, insDarkHorsePicks, insValuePicks,
+    ...(hasScores ? [insCurrentStandings, insBestPick, insWorstPick, insCutDamage,
+                     insLeaderPickCount, insMostConsistent, insContenderCoverage,
+                     insPaymentVsPerformance] : [])
+  ];
+
+  // Pick next unseen generator, cycling when all exhausted
+  const seen = state.insights.map(i=>i._gen);
+  const unseen = generators.filter(g=>!seen.includes(g.name));
+  const pool = unseen.length ? unseen : generators;
+  const gen = pool[Math.floor(Math.random()*pool.length)];
+
+  const result = gen(ps, ts);
+  if (!result) { generateInsight(); return; } // skip if no data
+  result._gen = gen.name;
+  result.ts = ts;
+  state.insights.push(result);
+  render();
+}
+
+function makeTable(headers, rows, colors=[]) {
+  const thStyle = 'padding:6px 10px;font-size:11px;font-weight:600;color:#006B3F;text-align:left;border-bottom:1px solid #e0e0e0;white-space:nowrap';
+  const tdStyle = 'padding:6px 10px;font-size:13px;border-bottom:0.5px solid #f0f0f0';
+  let tbl = `<table style="width:100%;border-collapse:collapse;font-family:Georgia,serif">
+    <thead><tr>${headers.map(h=>`<th style="${thStyle}">${h}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map((r,i)=>`<tr style="background:${colors[i]||'transparent'}">${r.map(c=>`<td style="${tdStyle}">${c}</td>`).join('')}</tr>`).join('')}</tbody>
+  </table>`;
+  const text = [headers.join('\t'), ...rows.map(r=>r.join('\t'))].join('\n');
+  return {tbl, text};
+}
+
+// ── Individual insight generators ─────────────────────────
+function insPopularPicks(ps, ts) {
+  const counts = {};
+  ps.forEach(p=>(p.picks||[]).filter(x=>x).forEach(g=>{ counts[g]=(counts[g]||0)+1; }));
+  if(!Object.keys(counts).length) return null;
+  const sorted = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  const total = ps.filter(p=>(p.picks||[]).filter(x=>x).length>0).length;
+  const {tbl,text} = makeTable(['Golfer','# Picked','% of Field'],
+    sorted.map(([n,c])=>[n, c, Math.round(c/total*100)+'%']),
+    sorted.map((_,i)=>i===0?'#fff8e1':i===1?'#f9f9f9':'transparent')
+  );
+  return {
+    category:'Pick Popularity',
+    headline:`${sorted[0][0]} is the most-selected golfer (${sorted[0][1]}/${total} teams)`,
+    body:`Here's how the field distributed their picks across the most-chosen golfers:`,
+    table:tbl, tableText:text
+  };
+}
+
+function insPickConcentration(ps, ts) {
+  const counts = {};
+  ps.forEach(p=>(p.picks||[]).filter(x=>x).forEach(g=>{ counts[g]=(counts[g]||0)+1; }));
+  const vals = Object.values(counts);
+  if(!vals.length) return null;
+  const total = ps.filter(p=>(p.picks||[]).filter(x=>x).length>0).length;
+  const top3 = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,3);
+  const unique = Object.keys(counts).length;
+  const avgPicksPerGolfer = (vals.reduce((s,v)=>s+v,0)/vals.length).toFixed(1);
+  const mostShared = top3[0];
+  return {
+    category:'Field Diversity',
+    headline:`${unique} different golfers selected across ${total} teams`,
+    body:`The field is ${unique>50?'highly diverse':'fairly concentrated'}. On average each golfer appears on ${avgPicksPerGolfer} teams. The top 3 most-picked golfers are: ${top3.map(([n,c])=>`${n} (${c} teams, ${Math.round(c/total*100)}%)`).join(', ')}. ${unique<30?'The field is heavily concentrated — differentiation will matter.':'Plenty of differentiation means the winner will likely have a contrarian pick pay off.'}`
+  };
+}
+
+function insSalaryBreakdown(ps, ts) {
+  const budgets = ps.map(p=>{
+    const picks = (p.picks||[]).filter(x=>x);
+    const used = picks.reduce((s,g)=>s+getSalary(g),0);
+    return {name:p.name, picks:picks.length, used};
+  }).filter(x=>x.picks===6);
+  if(!budgets.length) return null;
+  const avg = Math.round(budgets.reduce((s,x)=>s+x.used,0)/budgets.length);
+  const max = budgets.reduce((a,b)=>a.used>b.used?a:b);
+  const min = budgets.reduce((a,b)=>a.used<b.used?a:b);
+  const brackets = {'$40-44k':0,'$44-46k':0,'$46-48k':0,'$48-50k':0,'$50k':0};
+  budgets.forEach(x=>{
+    if(x.used===50000) brackets['$50k']++;
+    else if(x.used>=48000) brackets['$48-50k']++;
+    else if(x.used>=46000) brackets['$46-48k']++;
+    else if(x.used>=44000) brackets['$44-46k']++;
+    else brackets['$40-44k']++;
+  });
+  const {tbl,text} = makeTable(['Budget Range','# Teams'],
+    Object.entries(brackets).filter(([,v])=>v>0).map(([k,v])=>[k,v])
+  );
+  return {
+    category:'Salary Usage',
+    headline:`Average salary used: $${avg.toLocaleString()} / $50,000`,
+    body:`Highest spender: ${max.name} ($${max.used.toLocaleString()}). Most conservative: ${min.name} ($${min.used.toLocaleString()}). ${brackets['$50k']} teams maxed out the full budget.`,
+    table:tbl, tableText:text
+  };
+}
+
+function insUniquePicks(ps, ts) {
+  const counts = {};
+  ps.forEach(p=>(p.picks||[]).filter(x=>x).forEach(g=>{ counts[g]=(counts[g]||0)+1; }));
+  const solos = Object.entries(counts).filter(([,c])=>c===1).map(([n])=>n);
+  if(!solos.length) return {
+    category:'Unique Picks',
+    headline:'No golfer is picked by exactly one team',
+    body:'Every golfer in the field is shared by at least two participants — expect tight competition throughout.'
+  };
+  return {
+    category:'Unique Picks',
+    headline:`${solos.length} golfer${solos.length>1?'s are':'is'} picked by only one team`,
+    body:`These contrarian picks could be game-changers or fatal flaws: ${solos.join(', ')}. If any of them makes a run, that team gets a major advantage no one else shares.`
+  };
+}
+
+function insPaymentStatus(ps, ts) {
+  const paid = ps.filter(p=>p.payment_method);
+  const unpaid = ps.filter(p=>!p.payment_method);
+  const methods = {};
+  paid.forEach(p=>{ methods[p.payment_method]=(methods[p.payment_method]||0)+1; });
+  const {tbl,text} = makeTable(['Payment Method','# Teams'],
+    Object.entries(methods).sort((a,b)=>b[1]-a[1]).map(([k,v])=>[k,v])
+  );
+  return {
+    category:'Payment Status',
+    headline:`${paid.length} of ${ps.length} participants have paid ($${paid.length*50})`,
+    body:`${unpaid.length} still outstanding: ${unpaid.length?unpaid.map(p=>p.name).join(', '):'None — fully collected! 🎉'}`,
+    table:paid.length?tbl:undefined, tableText:paid.length?text:undefined
+  };
+}
+
+function insPicksCompletion(ps, ts) {
+  const full = ps.filter(p=>(p.picks||[]).filter(x=>x).length===6);
+  const partial = ps.filter(p=>{ const n=(p.picks||[]).filter(x=>x).length; return n>0&&n<6; });
+  const none = ps.filter(p=>(p.picks||[]).filter(x=>x).length===0);
+  return {
+    category:'Submission Status',
+    headline:`${full.length}/${ps.length} participants have submitted all 6 picks`,
+    body:`${partial.length} have partial picks, ${none.length} haven't picked yet.${none.length?` Still waiting on: ${none.map(p=>p.name).join(', ')}.`:''}`
+  };
+}
+
+function insDarkHorsePicks(ps, ts) {
+  const counts = {};
+  ps.forEach(p=>(p.picks||[]).filter(x=>x).forEach(g=>{ counts[g]=(counts[g]||0)+1; }));
+  const total = ps.filter(p=>(p.picks||[]).filter(x=>x).length>0).length;
+  // Dark horse = low salary (<$7500) AND picked by at least 1 team
+  const dark = Object.entries(counts)
+    .filter(([n])=>getSalary(n)<7500&&getSalary(n)>0)
+    .sort((a,b)=>b[1]-a[1]).slice(0,6);
+  if(!dark.length) return null;
+  const {tbl,text} = makeTable(['Golfer','Salary','# Teams'],
+    dark.map(([n,c])=>[n, '$'+getSalary(n).toLocaleString(), c])
+  );
+  return {
+    category:'Dark Horse Watch',
+    headline:`${dark.length} value picks under $7,500 are represented in the field`,
+    body:`These low-salary selections could swing the leaderboard if they outperform expectations:`,
+    table:tbl, tableText:text
+  };
+}
+
+function insValuePicks(ps, ts) {
+  const counts = {};
+  ps.forEach(p=>(p.picks||[]).filter(x=>x).forEach(g=>{ counts[g]=(counts[g]||0)+1; }));
+  // Most-picked golfers sorted by salary efficiency (picks per $1k salary)
+  const rows = Object.entries(counts).map(([n,c])=>{
+    const sal = getSalary(n)||1;
+    return {n, c, sal, eff: (c/(sal/1000)).toFixed(2)};
+  }).sort((a,b)=>b.eff-a.eff).slice(0,6);
+  if(!rows.length) return null;
+  const {tbl,text} = makeTable(['Golfer','Salary','# Picked','Picks/$1k'],
+    rows.map(r=>[r.n, '$'+r.sal.toLocaleString(), r.c, r.eff])
+  );
+  return {
+    category:'Value Analysis',
+    headline:`${rows[0].n} offers the best picks-per-dollar value at $${(getSalary(rows[0].n)/1000).toFixed(1)}k`,
+    body:`This shows which golfers are generating the most roster spots relative to their salary cost:`,
+    table:tbl, tableText:text
+  };
+}
+
+function insCurrentStandings(ps, ts) {
+  const board = buildLeaderboard().slice(0,8);
+  if(!board.length) return null;
+  const {tbl,text} = makeTable(['Pos','Participant','Score','Best 4 Picks'],
+    board.map((r,i)=>[
+      i+1,
+      r.name,
+      r.total===null?'—':fmt(r.total),
+      r.best4.map(g=>g.name).join(', ')
+    ]),
+    board.map((_,i)=>i===0?'#fff8e1':i===1?'#f9f9f9':i===2?'#fdf5ec':'transparent')
+  );
+  return {
+    category:'Live Standings',
+    headline:`${board[0].name} leads at ${fmt(board[0].total)}`,
+    body:`Current top 8 as of ${ts}:`,
+    table:tbl, tableText:text
+  };
+}
+
+function insBestPick(ps, ts) {
+  // Find the single best-scoring pick across all teams
+  const seen = {};
+  ps.forEach(p=>(p.picks||[]).filter(x=>x).forEach(g=>{
+    const s = getScore(g);
+    if(s.toPar!==null&&!s.cut) seen[g]=(seen[g]||[]).concat(s.toPar);
+  }));
+  if(!Object.keys(seen).length) return null;
+  const best = Object.entries(seen).sort((a,b)=>Math.min(...a[1])-Math.min(...b[1]))[0];
+  const owners = ps.filter(p=>(p.picks||[]).includes(best[0])).map(p=>p.name);
+  const score = getScore(best[0]);
+  return {
+    category:'Star Performer',
+    headline:`${best[0]} is the best-scoring pick at ${fmt(score.toPar)}`,
+    body:`${owners.length} team${owners.length>1?'s have':'has'} ${best[0]} on their roster: ${owners.join(', ')}. ${owners.length>1?'A shared advantage that won\'t separate the field.':'An exclusive advantage for '+owners[0]+'.'}`
+  };
+}
+
+function insWorstPick(ps, ts) {
+  const seen = {};
+  ps.forEach(p=>(p.picks||[]).filter(x=>x).forEach(g=>{
+    const s = getScore(g);
+    if(s.toPar!==null) seen[g]=(seen[g]||[]).concat(s.cut?99:s.toPar);
+  }));
+  if(!Object.keys(seen).length) return null;
+  const worst = Object.entries(seen).sort((a,b)=>Math.max(...b[1])-Math.max(...a[1]))[0];
+  const owners = ps.filter(p=>(p.picks||[]).includes(worst[0])).map(p=>p.name);
+  const score = getScore(worst[0]);
+  return {
+    category:'Costly Pick',
+    headline:`${worst[0]} is dragging teams down (${score.cut?'CUT':fmt(score.toPar)})`,
+    body:`${owners.length} team${owners.length>1?'s are':'is'} hurting from this pick: ${owners.join(', ')}. ${score.cut?worst[0]+' missed the cut — that\'s a dead slot for these teams.':'Still in, but a big liability.'}`
+  };
+}
+
+function insCutDamage(ps, ts) {
+  const cutGolfers = Object.entries(state.scores).filter(([,s])=>s.cut).map(([n])=>n);
+  if(!cutGolfers.length) return {category:'Cut Report',headline:'No cuts yet',body:'All selected golfers are still in the tournament — no damage reports.'};
+  const affected = ps.map(p=>{
+    const cutPicks = (p.picks||[]).filter(g=>cutGolfers.includes(g)||cutGolfers.includes(salaryToEspn[g]));
+    return {name:p.name, cuts:cutPicks};
+  }).filter(x=>x.cuts.length>0).sort((a,b)=>b.cuts.length-a.cuts.length);
+  if(!affected.length) return {category:'Cut Report',headline:'No participants affected by cuts yet',body:'All golfers on participant rosters are still in the tournament.'};
+  const {tbl,text} = makeTable(['Participant','# Cuts','Golfers Cut'],
+    affected.map(r=>[r.name, r.cuts.length, r.cuts.join(', ')])
+  );
+  return {
+    category:'Cut Damage Report',
+    headline:`${affected.length} teams have at least one golfer who missed the cut`,
+    body:`${affected[0].name} is hit hardest with ${affected[0].cuts.length} cut${affected[0].cuts.length>1?'s':''}:`,
+    table:tbl, tableText:text
+  };
+}
+
+function insLeaderPickCount(ps, ts) {
+  // How many teams have the current leaderboard leader
+  const board = buildLeaderboard();
+  if(!board.length||board[0].total===null) return null;
+  const leader = board[0];
+  // The leader's best pick
+  if(!leader.best4.length) return null;
+  const topPick = leader.best4[0].name;
+  const teamsWithTop = ps.filter(p=>(p.picks||[]).includes(topPick)).map(p=>p.name);
+  return {
+    category:'Leader Analysis',
+    headline:`${leader.name} leads — their top scorer is ${topPick}`,
+    body:`${teamsWithTop.length} team${teamsWithTop.length!==1?'s':''} share ${topPick}: ${teamsWithTop.join(', ')||'none'}. ${leader.name}'s full best-4: ${leader.best4.map(g=>g.name+' ('+fmt(g.toPar)+')').join(', ')}.`
+  };
+}
+
+function insMostConsistent(ps, ts) {
+  const scored = ps.map(p=>{
+    const picks = (p.picks||[]).filter(x=>x);
+    const scores = picks.map(g=>getScore(g)).filter(s=>s.toPar!==null&&!s.cut);
+    if(scores.length<3) return null;
+    const avg = scores.reduce((s,x)=>s+x.toPar,0)/scores.length;
+    const variance = scores.reduce((s,x)=>s+Math.pow(x.toPar-avg,2),0)/scores.length;
+    return {name:p.name, avg:avg.toFixed(1), variance:variance.toFixed(1), count:scores.length};
+  }).filter(Boolean).sort((a,b)=>parseFloat(a.variance)-parseFloat(b.variance));
+  if(scored.length<2) return null;
+  return {
+    category:'Consistency',
+    headline:`${scored[0].name} has the most consistent roster (variance: ${scored[0].variance})`,
+    body:`Lower variance means picks are performing more uniformly. ${scored[0].name}'s active picks average ${scored[0].avg} to par. High variance teams are swinging big — they'll either dominate or collapse.`
+  };
+}
+
+function insContenderCoverage(ps, ts) {
+  // Top 5 on the leaderboard — how many teams have at least one?
+  const board = buildLeaderboard().filter(x=>x.total!==null).slice(0,5);
+  if(!board.length) return null;
+  const topNames = board.map(b=>b.name);
+  const withContender = ps.filter(p=>{
+    const picks = (p.picks||[]).filter(x=>x);
+    return picks.some(g=>topNames.includes(g));
+  });
+  const without = ps.filter(p=>{
+    const picks = (p.picks||[]).filter(x=>x);
+    return !picks.some(g=>topNames.includes(g));
+  });
+  return {
+    category:'Contender Coverage',
+    headline:`${withContender.length}/${ps.length} teams have at least one top-5 player`,
+    body:`Top 5: ${topNames.join(', ')}. Teams with no contender on their roster: ${without.length?without.map(p=>p.name).join(', '):'None — everyone has a horse in the race!'}`
+  };
+}
+
+function insPaymentVsPerformance(ps, ts) {
+  const board = buildLeaderboard().filter(x=>x.total!==null);
+  if(!board.length) return null;
+  const paidTop = board.filter(b=>{
+    const p = ps.find(x=>x.name===b.name);
+    return p&&p.payment_method;
+  }).slice(0,3);
+  const unpaidTop = board.filter(b=>{
+    const p = ps.find(x=>x.name===b.name);
+    return p&&!p.payment_method;
+  }).slice(0,3);
+  return {
+    category:'Payment vs. Performance',
+    headline:`Paid participants ${paidTop.length>0&&(paidTop[0].total||0)<=(unpaidTop[0]?.total||0)?'lead':'trail'} the unpaid ones`,
+    body:`Top paid performers: ${paidTop.length?paidTop.map(b=>b.name+' ('+fmt(b.total)+')').join(', '):'none yet'}. Top unpaid: ${unpaidTop.length?unpaidTop.map(b=>b.name+' ('+fmt(b.total)+')').join(', '):'none yet'}. ${unpaidTop.length?'Gentle reminder: the prize pot requires payment to claim.':''}`
+  };
 }
 
 function renderParticipants() {
@@ -1867,11 +2204,11 @@ async function doImportPicks() {
   function _play(){
     if(_done)return; _done=true;
     var a=new Audio(_src);
-    a.volume=0.00987;
+    a.volume=0.0141;
     a.play().catch(function(){_done=false;});
     var iv=setInterval(function(){
       var t=a.currentTime;
-      if(t>=8)a.volume=Math.max(0,0.00987*(1-(t-8)/2));
+      if(t>=8)a.volume=Math.max(0,0.0141*(1-(t-8)/2));
       if(t>=10){a.pause();clearInterval(iv);}
     },80);
   }
