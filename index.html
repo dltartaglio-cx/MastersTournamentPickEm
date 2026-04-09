@@ -422,50 +422,104 @@ function buildNameMap(espnNames) {
 
 async function fetchScores() {
   state.scoresLoading=true; state.scoresError=null; render();
-  try {
-    // 2026 Masters event ID = 401811941
-    const res=await fetch('https://site.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard?event=401811941',{cache:'no-store'});
-    const data=await res.json();
-    const newScores={};
-    const comps=data?.events?.[0]?.competitions?.[0]?.competitors||[];
+
+  // Masters.com official JSON feed — CORS-open, no API key needed
+  // Falls back to ESPN if masters.com fails
+  const ENDPOINTS = [
+    { url:'https://www.masters.com/api/leaderboard/leaderboard.json', parser: parseMasters },
+    { url:'https://www.masters.com/api/scores/leaderboard.json',      parser: parseMasters },
+    { url:'https://www.masters.com/en_US/scores/feeds/2026/scores.json', parser: parseMasters },
+    { url:'https://site.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard?event=401811941', parser: parseESPN },
+    { url:'https://site.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard?event=401580365', parser: parseESPN },
+  ];
+
+  function parseMasters(data) {
+    // masters.com feed format: data.player[] or data.leaderboard[]
+    const players = data?.data?.player || data?.player || data?.leaderboard || [];
+    if (!players.length) return null;
+    const newScores = {};
+    players.forEach(p => {
+      const name = (p.full_name||p.name||'').trim();
+      if (!name) return;
+      const toParRaw = p.topar ?? p.toPar ?? p.total ?? p.score ?? 0;
+      const toPar = typeof toParRaw === 'string'
+        ? (toParRaw==='E'||toParRaw===''? 0 : parseInt(toParRaw)||0)
+        : (toParRaw||0);
+      const todayRaw = p.today ?? p.round_score ?? null;
+      const today = todayRaw==null ? null
+        : typeof todayRaw==='string'
+          ? (todayRaw==='E'? 0 : parseInt(todayRaw)||null)
+          : todayRaw;
+      const thruRaw = p.thru ?? p.hole ?? '';
+      const thru = String(thruRaw==='18'||thruRaw===18?'F':thruRaw||'');
+      const cut = !!(p.status==='C'||p.cut||p.missed_cut);
+      const entry = {toPar, cut, thru, today, espnName:name};
+      newScores[name] = entry;
+      const salaryName = espnToSalary[name];
+      if (salaryName && salaryName !== name) newScores[salaryName] = entry;
+    });
+    return Object.keys(newScores).length ? newScores : null;
+  }
+
+  function parseESPN(data) {
+    const comps = data?.events?.[0]?.competitions?.[0]?.competitors||[];
+    if (!comps.length) return null;
     const espnNames = comps.map(c=>c.athlete?.displayName||'').filter(Boolean);
-
-    // Build name mapping each time scores refresh
     buildNameMap(espnNames);
-
+    const newScores = {};
     comps.forEach(c=>{
-      const espnName=c.athlete?.displayName||'';
-      if(!espnName) return;
-      const scoreStr=c.score?.displayValue||'E';
-      const cut=c.status?.type?.id==='6'||c.status?.type?.name==='STATUS_CUT';
-      let toPar=0;
-      if(scoreStr!=='E'&&scoreStr!=='--'&&scoreStr!==''){const n=parseInt(scoreStr);toPar=isNaN(n)?0:n;}
-      // Today's round: scan linescores from end, skip '--' placeholders
-      let today=null;
-      const lines=c.linescores||[];
-      for(let i=lines.length-1;i>=0;i--){
+      const espnName = c.athlete?.displayName||'';
+      if (!espnName) return;
+      const scoreStr = c.score?.displayValue||'E';
+      const cut = c.status?.type?.id==='6'||c.status?.type?.name==='STATUS_CUT';
+      let toPar = 0;
+      if (scoreStr!=='E'&&scoreStr!=='--'&&scoreStr!=='') {
+        const n=parseInt(scoreStr); toPar=isNaN(n)?0:n;
+      }
+      let today = null;
+      const lines = c.linescores||[];
+      for (let i=lines.length-1;i>=0;i--) {
         const v=lines[i]?.displayValue;
-        if(v&&v!=='--'){
-          if(v==='E') today=0;
-          else{const n=parseInt(v);if(!isNaN(n))today=n;}
+        if (v&&v!=='--') {
+          if (v==='E') today=0;
+          else { const n=parseInt(v); if(!isNaN(n)) today=n; }
           break;
         }
       }
-      // Thru: use status displayValue, normalize
-      let thru='';
-      const sd=c.status?.displayValue||'';
-      if(sd==='F'||sd==='Final') thru='F';
-      else if(/^\d+$/.test(sd)) thru=sd;
-      else thru=sd;
-      const entry={toPar,cut,thru,today,espnName};
+      const sd = c.status?.displayValue||'';
+      const thru = sd==='F'||sd==='Final'?'F': /^\d+$/.test(sd)?sd:sd;
+      const entry = {toPar,cut,thru,today,espnName};
       newScores[espnName] = entry;
       const salaryName = espnToSalary[espnName];
-      if(salaryName && salaryName !== espnName) newScores[salaryName] = entry;
+      if (salaryName && salaryName!==espnName) newScores[salaryName] = entry;
     });
-    if(Object.keys(newScores).length>0){state.scores=newScores; state.lastFetched=new Date();}
-    else{state.scoresError='No competitor data returned — check back shortly.';}
-  } catch(e){state.scoresError='Could not load live scores: '+e.message;}
-  state.scoresLoading=false; render();
+    return Object.keys(newScores).length ? newScores : null;
+  }
+
+  let lastErr = '';
+  for (const ep of ENDPOINTS) {
+    try {
+      const res = await fetch(ep.url, {cache:'no-store', mode:'cors'});
+      if (!res.ok) { lastErr=`HTTP ${res.status} from ${ep.url}`; continue; }
+      const data = await res.json();
+      const scores = ep.parser(data);
+      if (scores) {
+        buildNameMap(Object.keys(scores));
+        state.scores = scores;
+        state.lastFetched = new Date();
+        state.scoresLoading = false;
+        render();
+        return;
+      }
+      lastErr = `Empty data from ${ep.url}`;
+    } catch(e) {
+      lastErr = `${e.message} (${ep.url})`;
+      console.warn('fetchScores failed for', ep.url, e);
+    }
+  }
+  state.scoresError = 'Could not load scores. '+lastErr;
+  state.scoresLoading = false;
+  render();
 }
 
 // ── Render helpers ────────────────────────────────────────
@@ -593,7 +647,7 @@ function renderLeaderboard() {
 
 // ── Render: Golfers ───────────────────────────────────────
 function renderGolfers() {
-  if(!Object.keys(state.scores).length) return `<div class="card"><div class="empty-state">No scores loaded.<br><button class="btn btn-primary" style="margin-top:12px" onclick="fetchScores()">Load Live Scores</button></div></div>`;
+  if(!Object.keys(state.scores).length) return `<div class="card"><div class="empty-state">${state.scoresError?state.scoresError:'No scores loaded yet.'}<br><button class="btn btn-primary" style="margin-top:12px" onclick="fetchScores()">⟳ Load Live Scores</button></div></div>`;
 
   // Deduplicate: only keep ESPN names (each golfer once, highest-priority entry)
   const seen=new Set();
