@@ -2066,7 +2066,7 @@ function toggleMastersAudio() {
   const audio = document.getElementById('masters-audio');
   const btn = document.getElementById('masters-audio-btn');
   if (!audio) return;
-  audio.volume = 0.0625;
+  audio.volume = 0.01875;
   if (audio.paused) {
     audio.currentTime = 0;
     audio.play().then(function() {
