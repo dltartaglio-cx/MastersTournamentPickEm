@@ -2066,7 +2066,7 @@ function toggleMastersAudio() {
   const audio = document.getElementById('masters-audio');
   const btn = document.getElementById('masters-audio-btn');
   if (!audio) return;
-  audio.volume = 0.25;
+  audio.volume = 0.125;
   if (audio.paused) {
     audio.play().then(function() {
       if (btn) btn.title = 'Click to pause Masters theme';
