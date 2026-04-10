@@ -522,10 +522,10 @@ function getRoundLabel() {
   const now = new Date();
   const mastersStart = new Date('2026-04-09T00:00:00');
   const dayOffset = Math.floor((now - mastersStart) / 86400000);
-  if (dayOffset <= 0) return 'Opening Round';
-  if (dayOffset === 1) return 'Round 2';
-  if (dayOffset === 2) return 'Moving Day';
-  return 'Final Round';
+  if (dayOffset <= 0) return 'Live — Opening Round';
+  if (dayOffset === 1) return 'Live — Round 2';
+  if (dayOffset === 2) return 'Live — Moving Day';
+  return 'Live — Final Round';
 }
 
 function golferOptions(picks, cur) {
@@ -593,7 +593,7 @@ function renderLeaderboard() {
   let h=`<div class="stats-row" style="grid-template-columns:repeat(3,1fr)">
     <div class="stat-card"><div class="stat-val">${submittedCount}</div><div class="stat-lbl">Entries</div></div>
     <div class="stat-card"><div class="stat-val">$${(submittedCount*50).toLocaleString()}</div><div class="stat-lbl">Prize Pool</div></div>
-    <div class="stat-card"><div class="stat-val">${hasScores?'Live':'—'}</div><div class="stat-lbl">${hasScores?getRoundLabel():'Scores'}</div></div>
+    <div class="stat-card"><div class="stat-val" style="font-size:${hasScores?'14px':'22px'};white-space:nowrap;line-height:1.2">${hasScores?getRoundLabel():"—"}</div><div class="stat-lbl">Scores</div></div>
   </div>`;
   if(!pickCount){
     h+='<div class="card"><div class="empty-state">No picks submitted yet.</div></div>';
@@ -709,7 +709,7 @@ function renderGolfers() {
     rows+=`<tr style="background:${rowBg};border-bottom:0.5px solid rgba(0,0,0,0.08)">
       <td style="padding:7px 10px;font-size:13px;font-weight:600;color:#1a1a1a;width:38px;border-right:1px solid #d4c88a">${s.cut?'—':pos}</td>
       <td style="padding:7px 10px;font-size:13px;font-weight:500;color:#1a1a1a;border-right:1px solid #d4c88a">${name}${s.cut?'<span style="font-size:10px;background:#e8c840;color:#3a2a00;padding:1px 5px;border-radius:3px;margin-left:6px;font-weight:700">CUT</span>':''}</td>
-      <td style="padding:7px 10px;font-size:13px;text-align:center;color:#333;width:52px;border-right:1px solid #d4c88a">${s.thru||(s.teeTime?`<span style="font-size:11px;color:#888">${s.teeTime}</span>`:\'—\')}</td>
+      <td style="padding:7px 10px;font-size:13px;text-align:center;color:#333;width:52px;border-right:1px solid #d4c88a">${s.thru||'—'}</td>
       <td style="padding:7px 10px;font-size:13px;text-align:center;width:60px;border-right:1px solid #d4c88a">${fmtScore(s.today)}</td>
       <td style="padding:7px 10px;font-size:13px;text-align:center;width:60px">${fmtTotal(s.toPar,s.cut)}</td>
     </tr>`;
