@@ -537,6 +537,32 @@ function getRoundLabel() {
   return 'Final Round';
 }
 
+// ── Cut line helper ───────────────────────────────────────
+function getCutInfo() {
+  const scores = state.scores;
+  if (!scores || !Object.keys(scores).length) return null;
+  const now = new Date();
+  const mastersStart = new Date('2026-04-09T00:00:00');
+  const dayOffset = Math.floor((now - mastersStart) / 86400000);
+  // Round 3+ means cut has happened; Round 1-2 is projected
+  const cutHappened = dayOffset >= 2;
+  const label = cutHappened ? 'Cut Line' : 'Projected Cut';
+  if (cutHappened) {
+    // Find the worst (highest) score among players who made the cut
+    const madeCut = Object.values(scores).filter(s => s.toPar !== null && !s.cut).map(s => s.toPar);
+    if (!madeCut.length) return null;
+    const cutScore = Math.max(...madeCut);
+    return { label, score: cutScore };
+  } else {
+    // Projected cut: 70th place score among all players with a valid score
+    const allScores = Object.values(scores).filter(s => s.toPar !== null).map(s => s.toPar);
+    if (!allScores.length) return null;
+    const sorted = [...allScores].sort((a, b) => a - b);
+    const cutIdx = Math.min(69, sorted.length - 1);
+    return { label, score: sorted[cutIdx] };
+  }
+}
+
 function golferOptions(picks, cur) {
   const used=new Set(picks.filter(p=>p));
   return SALARY_DATA.map(g=>{
@@ -613,7 +639,7 @@ function renderLeaderboard() {
   <div class="status-bar" style="padding:12px 16px 0">
     ${hasScores?`<div class="live-badge"><div class="live-dot"></div>Live${state.lastFetched?` &middot; updated ${state.lastFetched.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}`:''}
     </div>`:`<div style="font-size:12px;color:#aaa">Scores not loaded</div>`}
-
+    ${(()=>{const ci=getCutInfo();return ci&&hasScores?`<div style="font-size:13px;font-weight:500;color:#555">${ci.label}: <strong>${ci.score>0?'+'+ci.score:ci.score===0?'E':ci.score}</strong></div>`:''})()}
   </div>
   <div style="padding:0 8px"><table class="leaderboard-table"><thead><tr>
     <th style="width:36px">Pos</th><th>Participant</th><th class="right">Best 4 Score</th><th style="width:24px"></th>
@@ -674,7 +700,7 @@ function renderLeaderboard() {
           </div>
         </div>`;
       });
-      h+=`</div>${hasScores && entry.total !== null ? '<div style="font-size:11px;color:#666;margin-top:8px"><span style="color:#2E7D32">&#9632;</span> Green = counting &nbsp; <span style="color:#C0392B">&#9632;</span> Red = not counting or cut</div>' : ''}</div></td></tr>`;
+      h+=`</div>${hasScores && entry.total !== null ? (()=>{const ci=getCutInfo();const cutStr=ci?` &nbsp; <span style="color:#555">&#9632;</span> ${ci.label}: <strong>${ci.score>0?'+'+ci.score:ci.score===0?'E':ci.score}</strong>`:'';return`<div style="font-size:11px;color:#666;margin-top:8px"><span style="color:#2E7D32">&#9632;</span> Green = counting &nbsp; <span style="color:#C0392B">&#9632;</span> Red = not counting or cut${cutStr}</div>`;})() : ''}</div></td></tr>`;
     }
   });
   h+='</tbody></table></div></div>';
