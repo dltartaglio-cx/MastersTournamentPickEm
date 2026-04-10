@@ -258,7 +258,7 @@ function genPw() {
 // ── State ─────────────────────────────────────────────────
 let state = {
   tab: 'leaderboard',
-  scores: {}, scoresLoading: false, scoresError: null, lastFetched: null,
+  scores: {}, scoresLoading: false, scoresError: null, lastFetched: null, frozenCutLine: null,
   // DB data
   participants: [],   // array of row objects from supabase
   settings: { submissions_open: false },
@@ -516,6 +516,16 @@ async function fetchScores() {
       if(scores){
         if(isMasters) buildNameMap(Object.keys(scores));
         state.scores=scores; state.lastFetched=new Date();
+        // Freeze the cut line once R3/R4 starts — it never changes after the cut is made
+        if (state.frozenCutLine === null) {
+          const _now = new Date();
+          const _mastersStart = new Date('2026-04-09T00:00:00');
+          const _dayOffset = Math.floor((_now - _mastersStart) / 86400000);
+          if (_dayOffset >= 2) {
+            const madeCut = Object.values(scores).filter(s => s.toPar !== null && !s.cut).map(s => s.toPar);
+            if (madeCut.length) state.frozenCutLine = Math.max(...madeCut);
+          }
+        }
         state.scoresLoading=false; render(); return;
       }
       lastErr='No competitor data from '+url;
@@ -544,23 +554,25 @@ function getCutInfo() {
   const now = new Date();
   const mastersStart = new Date('2026-04-09T00:00:00');
   const dayOffset = Math.floor((now - mastersStart) / 86400000);
-  // Round 3+ means cut has happened; Round 1-2 is projected
+  // Round 3+ means cut has already happened
   const cutHappened = dayOffset >= 2;
-  const label = cutHappened ? 'Cut Line' : 'Projected Cut';
+
   if (cutHappened) {
-    // Find the worst (highest) score among players who made the cut
-    const madeCut = Object.values(scores).filter(s => s.toPar !== null && !s.cut).map(s => s.toPar);
-    if (!madeCut.length) return null;
-    const cutScore = Math.max(...madeCut);
-    return { label, score: cutScore };
-  } else {
-    // Projected cut: 70th place score among all players with a valid score
-    const allScores = Object.values(scores).filter(s => s.toPar !== null).map(s => s.toPar);
-    if (!allScores.length) return null;
-    const sorted = [...allScores].sort((a, b) => a - b);
-    const cutIdx = Math.min(69, sorted.length - 1);
-    return { label, score: sorted[cutIdx] };
+    // Cut is done — use the frozen value captured at end of R2 (never recalculates)
+    if (state.frozenCutLine === null) return null;
+    return { label: 'Cut Line', score: state.frozenCutLine };
   }
+
+  // Round 1 or 2 — use live score data: 50th place among active (non-cut) players
+  // De-dupe by espnName so each golfer only counts once
+  const seen = new Set();
+  const active = Object.values(scores)
+    .filter(s => s.toPar !== null && !s.cut && !seen.has(s.espnName) && seen.add(s.espnName))
+    .map(s => s.toPar)
+    .sort((a, b) => a - b);
+  if (!active.length) return null;
+  const cutIdx = Math.min(49, active.length - 1); // 50th place (0-indexed: 49)
+  return { label: 'Projected Cut', score: active[cutIdx] };
 }
 
 function golferOptions(picks, cur) {
