@@ -637,10 +637,10 @@ function renderLeaderboard() {
   const hasScores=Object.keys(state.scores).length>0;
   const pickCount=state.participants.filter(p=>(p.picks||[]).some(x=>x&&x.trim())).length;
   const submittedCount = state.participants.filter(p=>(p.picks||[]).some(x=>x&&x.trim())).length;
-  let h=`<div class="stats-row" style="grid-template-columns:repeat(3,1fr)">
+  let h=`<div class="stats-row" style="grid-template-columns:2fr 1fr 1fr">
+    <div class="stat-card"><div class="stat-val" style="font-size:clamp(13px,3.8vw,22px);white-space:nowrap">${hasScores?getRoundLabel():'—'}</div><div class="stat-lbl">${hasScores?'<a href="https://www.masters.com/en_US/live/index.html" target="_blank" style="color:inherit;text-decoration:underline;">Watch Live</a>':'Closed'}</div></div>
     <div class="stat-card"><div class="stat-val">${submittedCount}</div><div class="stat-lbl">Entries</div></div>
     <div class="stat-card"><div class="stat-val">$${(submittedCount*50).toLocaleString()}</div><div class="stat-lbl">Prize Pool</div></div>
-    <div class="stat-card"><div class="stat-val">${hasScores?getRoundLabel():'—'}</div><div class="stat-lbl">${hasScores?'<a href="https://www.masters.com/en_US/live/index.html" target="_blank" style="color:inherit;text-decoration:underline;">Watch Live</a>':'Closed'}</div></div>
   </div>`;
   if(!pickCount){
     h+='<div class="card"><div class="empty-state">No picks submitted yet.</div></div>';
