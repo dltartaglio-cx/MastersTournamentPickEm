@@ -385,6 +385,7 @@ let salaryToEspn = {};   // salaryName -> espnName
 function normalizeName(n) {
   return (n||'')
     .toLowerCase()
+    .replace(/ø/g, 'o').replace(/æ/g, 'ae').replace(/å/g, 'a') // Scandinavian letters
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // strip accents
     .replace(/[^a-z\s]/g, '')
     .replace(/\s+/g, ' ')
