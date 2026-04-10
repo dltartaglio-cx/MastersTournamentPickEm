@@ -752,8 +752,22 @@ function renderGolfers() {
     return `<span style="color:#1a7a1a;font-weight:700">+${v}</span>`;
   }
 
-  let rows=''; let pos=1;
+  // Only show cut line during R1/R2 (not after cut has happened)
+  const _cutNow = new Date();
+  const _cutStart = new Date('2026-04-09T00:00:00');
+  const _cutDayOffset = Math.floor((_cutNow - _cutStart) / 86400000);
+  const _showProjectedCutLine = _cutDayOffset < 2;
+
+  let rows=''; let pos=1; let cutLineInserted=false;
   sorted.forEach(([name,s],idx)=>{
+    // Insert the projected cut line marker after the 50th active golfer (R1/R2 only)
+    if(_showProjectedCutLine && !cutLineInserted && !s.cut && pos === 51){
+      cutLineInserted=true;
+      rows+=`<tr><td colspan="5" style="padding:0;line-height:0">
+        <div style="border-top:2px solid #C0392B;margin:0"></div>
+        <div style="text-align:center;font-size:11px;font-weight:600;color:#C0392B;padding:3px 0 2px;background:#fff8f8;letter-spacing:0.03em">― Projected Cut Line ―</div>
+      </td></tr>`;
+    }
     const isEven=idx%2===0;
     const rowBg=isEven?'#fefdf9':'#f5f2e8';
     rows+=`<tr style="background:${rowBg};border-bottom:0.5px solid rgba(0,0,0,0.08)">
