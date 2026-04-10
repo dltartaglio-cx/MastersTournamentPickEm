@@ -304,11 +304,16 @@ let state = {
 // ── Scoring ───────────────────────────────────────────────
 function getScore(name) {
   // Direct match first
-  if(state.scores[name]) return state.scores[name];
+  let entry = state.scores[name];
   // Try resolved ESPN name
-  const espn = salaryToEspn[name];
-  if(espn && state.scores[espn]) return state.scores[espn];
-  return {toPar:null,cut:false,thru:'',teeTime:''};
+  if(!entry) { const espn = salaryToEspn[name]; if(espn) entry = state.scores[espn]; }
+  if(!entry) return {toPar:null,cut:false,thru:'',teeTime:''};
+  // If the cut line is frozen (R3/R4) and this player's score is AT or BETTER than
+  // the cut number, they made the cut regardless of what the API says — ties survive.
+  if(entry.cut && state.frozenCutLine !== null && entry.toPar !== null && entry.toPar <= state.frozenCutLine) {
+    return {...entry, cut: false};
+  }
+  return entry;
 }
 function getSalary(name) { 
   const g = state.golfers.find(x=>x.name===name);
@@ -666,7 +671,7 @@ function renderLeaderboard() {
     if(idx>0&&board[idx-1].total!==entry.total) rank=idx+1;
     h+=`<tr class="row-main" onclick="toggleRow('${entry.id}')">
       <td class="pos-cell ${posClass}">${entry.total===null?'—':rank}</td>
-      <td class="name-cell">${entry.name}${hasCut?'<span class="cut-badge">CUT</span>':''}${jacketsForWinner(entry.past_winner||'')}</td>
+      <td class="name-cell">${entry.name}${jacketsForWinner(entry.past_winner||'')}</td>
       <td class="score-cell ${entry.total!==null?sc(entry.total):'even'}">${disp}</td>
       <td class="expand-arrow">${isExp?'&#9650;':'&#9660;'}</td></tr>`;
     if(isExp&&!noPicks){
@@ -728,11 +733,14 @@ function renderGolfers() {
 
   // Deduplicate: only keep ESPN names (each golfer once, highest-priority entry)
   const seen=new Set();
-  const sorted=Object.entries(state.scores).filter(([name,s])=>{
+  // Run each entry through getScore so tie-at-cut-line override is applied
+  const sorted=Object.entries(state.scores).map(([name,s])=>{
     const canon=s.espnName||name;
+    return [name, getScore(name), canon];
+  }).filter(([name,s,canon])=>{
     if(seen.has(canon)) return false;
     seen.add(canon); return true;
-  }).sort((a,b)=>{
+  }).map(([name,s])=>[name,s]).sort((a,b)=>{
     if(a[1].cut&&!b[1].cut) return 1;
     if(!a[1].cut&&b[1].cut) return -1;
     return a[1].toPar-b[1].toPar;
@@ -758,16 +766,23 @@ function renderGolfers() {
   const _cutDayOffset = Math.floor((_cutNow - _cutStart) / 86400000);
   const _showProjectedCutLine = _cutDayOffset < 2;
 
-  let rows=''; let pos=1; let cutLineInserted=false;
-  sorted.forEach(([name,s],idx)=>{
-    // Insert the projected cut line marker after the 50th active golfer (R1/R2 only)
-    if(_showProjectedCutLine && !cutLineInserted && !s.cut && pos === 51){
-      cutLineInserted=true;
-      rows+=`<tr><td colspan="5" style="padding:0;line-height:0">
-        <div style="border-top:2px solid #C0392B;margin:0"></div>
-        <div style="text-align:center;font-size:11px;font-weight:600;color:#C0392B;padding:3px 0 2px;background:#fff8f8;letter-spacing:0.03em">― Projected Cut Line ―</div>
-      </td></tr>`;
+  // Find the cut score (50th place) and the index of the LAST player tied at that score
+  // so the red line appears after all players who made the cut, including ties
+  let _cutLineAfterIdx = -1;
+  if (_showProjectedCutLine) {
+    const _active = sorted.filter(([,s]) => !s.cut && s.toPar !== null);
+    if (_active.length > 0) {
+      const _cutScore = _active[Math.min(49, _active.length - 1)][1].toPar;
+      // Walk sorted and find the last non-cut entry whose score === _cutScore
+      for (let i = sorted.length - 1; i >= 0; i--) {
+        const [,s] = sorted[i];
+        if (!s.cut && s.toPar === _cutScore) { _cutLineAfterIdx = i; break; }
+      }
     }
+  }
+
+  let rows=''; let pos=1;
+  sorted.forEach(([name,s],idx)=>{
     const isEven=idx%2===0;
     const rowBg=isEven?'#fefdf9':'#f5f2e8';
     rows+=`<tr style="background:${rowBg};border-bottom:0.5px solid rgba(0,0,0,0.08)">
@@ -778,6 +793,13 @@ function renderGolfers() {
       <td style="padding:7px 10px;font-size:13px;text-align:center;width:60px">${fmtTotal(s.toPar,s.cut)}</td>
     </tr>`;
     if(!s.cut) pos++;
+    // Insert the projected cut line marker AFTER the last player tied at the cut score
+    if(_showProjectedCutLine && idx === _cutLineAfterIdx){
+      rows+=`<tr><td colspan="5" style="padding:0;line-height:0">
+        <div style="border-top:2px solid #C0392B;margin:0"></div>
+        <div style="text-align:center;font-size:11px;font-weight:600;color:#C0392B;padding:3px 0 2px;background:#fff8f8;letter-spacing:0.03em">― Projected Cut Line ―</div>
+      </td></tr>`;
+    }
   });
 
   return `<div style="border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.15);margin-bottom:1rem">
