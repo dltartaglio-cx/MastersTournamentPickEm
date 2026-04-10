@@ -531,7 +531,7 @@ function getRoundLabel() {
   const mastersStart = new Date('2026-04-09T00:00:00');
   const dayOffset = Math.floor((now - mastersStart) / 86400000);
   if (dayOffset <= 0) return 'Opening Round';
-  if (dayOffset === 1) return 'Round 2';
+  if (dayOffset === 1) return 'Second Round';
   if (dayOffset === 2) return 'Moving Day';
   return 'Final Round';
 }
@@ -601,7 +601,7 @@ function renderLeaderboard() {
   let h=`<div class="stats-row" style="grid-template-columns:repeat(3,1fr)">
     <div class="stat-card"><div class="stat-val">${submittedCount}</div><div class="stat-lbl">Entries</div></div>
     <div class="stat-card"><div class="stat-val">$${(submittedCount*50).toLocaleString()}</div><div class="stat-lbl">Prize Pool</div></div>
-    <div class="stat-card"><div class="stat-val" style="${hasScores?'font-size:14px;line-height:1.2':''}">${hasScores?getRoundLabel():'—'}</div><div class="stat-lbl">${hasScores?'● Live':'Scores'}</div></div>
+    <div class="stat-card"><div class="stat-val">${hasScores?getRoundLabel():'—'}</div><div class="stat-lbl">${hasScores?'Live':'Closed'}</div></div>
   </div>`;
   if(!pickCount){
     h+='<div class="card"><div class="empty-state">No picks submitted yet.</div></div>';
