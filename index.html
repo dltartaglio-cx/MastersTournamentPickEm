@@ -305,8 +305,14 @@ let state = {
 function getScore(name) {
   // Direct match first
   let entry = state.scores[name];
-  // Try resolved ESPN name
+  // Try resolved ESPN name via salaryToEspn map
   if(!entry) { const espn = salaryToEspn[name]; if(espn) entry = state.scores[espn]; }
+  // Try scanning scores by normalized name (catches ø/oj variants not yet in map)
+  if(!entry) {
+    const norm = normalizeName(name);
+    const key = Object.keys(state.scores).find(k => normalizeName(k) === norm);
+    if(key) entry = state.scores[key];
+  }
   if(!entry) return {toPar:null,cut:false,thru:'',teeTime:''};
   // If the cut line is frozen (R3/R4) and this player's score is AT or BETTER than
   // the cut number, they made the cut regardless of what the API says — ties survive.
@@ -397,13 +403,26 @@ function lastName(n) {
   return parts[parts.length - 1];
 }
 
+// Hardcoded aliases: maps any variant of a name → canonical salary list name
+// Key = normalized form, value = exact salary name
+const NAME_ALIASES = {
+  'nicolai hojgaard': 'Nicolai Hojgaard',
+  'nicolai hojgard':  'Nicolai Hojgaard',
+  'rasmus hojgaard':  'Rasmus Hojgaard',
+  'rasmus hojgard':   'Rasmus Hojgaard',
+};
+
 function buildNameMap(espnNames) {
   espnToSalary = {};
   salaryToEspn = {};
   const salaryNames = state.golfers.map(g => g.name);
 
   espnNames.forEach(espn => {
-    // 1. Exact match
+    // 0. Hardcoded alias check (handles ø/oj variants and other known issues)
+    const alias = NAME_ALIASES[normalizeName(espn)];
+    if (alias) { espnToSalary[espn] = alias; salaryToEspn[alias] = espn; return; }
+
+    // 1. Exact match after normalization (handles accents, ø→o, etc.)
     const exact = salaryNames.find(s => normalizeName(s) === normalizeName(espn));
     if (exact) { espnToSalary[espn] = exact; salaryToEspn[exact] = espn; return; }
 
