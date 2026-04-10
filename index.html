@@ -58,7 +58,7 @@ h1{color:#1a1a1a;font-family:Georgia,serif;font-weight:400}
 .picks-row td{padding:0;border-bottom:0.5px solid rgba(255,255,255,0.08)}
 .picks-panel{background:#f9f9f9;padding:10px 12px}
 .picks-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}
-.pick-item{background:#fff;border:0.5px solid rgba(0,0,0,0.12);border-radius:6px;padding:7px 9px;display:flex;justify-content:space-between;align-items:center;gap:4px}
+.pick-item{background:#fff;border:0.5px solid rgba(0,0,0,0.12);border-radius:6px;padding:7px 9px;display:flex;justify-content:space-between;align-items:flex-start;gap:4px}
 .pick-name{font-size:13px;font-weight:500;word-break:break-word}
 .pick-score{font-size:13px;font-variant-numeric:tabular-nums;flex-shrink:0}
 .pick-salary{font-size:11px;color:#999}
@@ -307,7 +307,7 @@ function getScore(name) {
   // Try resolved ESPN name
   const espn = salaryToEspn[name];
   if(espn && state.scores[espn]) return state.scores[espn];
-  return {toPar:null,cut:false};
+  return {toPar:null,cut:false,thru:'',teeTime:''};
 }
 function getSalary(name) { 
   const g = state.golfers.find(x=>x.name===name);
@@ -512,6 +512,17 @@ async function fetchScores() {
 }
 
 // ── Render helpers ────────────────────────────────────────
+// ── Round label helper ────────────────────────────────────
+function getRoundLabel() {
+  const now = new Date();
+  const mastersStart = new Date('2026-04-09T00:00:00');
+  const dayOffset = Math.floor((now - mastersStart) / 86400000);
+  if (dayOffset <= 0) return 'Live — Opening Round';
+  if (dayOffset === 1) return 'Live — Round 2';
+  if (dayOffset === 2) return 'Live — Moving Day';
+  return 'Live — Final Round';
+}
+
 function golferOptions(picks, cur) {
   const used=new Set(picks.filter(p=>p));
   return SALARY_DATA.map(g=>{
@@ -577,7 +588,7 @@ function renderLeaderboard() {
   let h=`<div class="stats-row" style="grid-template-columns:repeat(3,1fr)">
     <div class="stat-card"><div class="stat-val">${submittedCount}</div><div class="stat-lbl">Entries</div></div>
     <div class="stat-card"><div class="stat-val">$${(submittedCount*50).toLocaleString()}</div><div class="stat-lbl">Prize Pool</div></div>
-    <div class="stat-card"><div class="stat-val">${hasScores?'Live':'—'}</div><div class="stat-lbl">Scores</div></div>
+    <div class="stat-card"><div class="stat-val" style="font-size:${hasScores?'11px':'15px'};white-space:nowrap;line-height:1.3">${hasScores?getRoundLabel():'—'}</div><div class="stat-lbl">Scores</div></div>
   </div>`;
   if(!pickCount){
     h+='<div class="card"><div class="empty-state">No picks submitted yet.</div></div>';
@@ -620,9 +631,31 @@ function renderLeaderboard() {
         const bgStyle = hasScores && entry.total !== null
           ? (cnt ? 'background:#E8F5E9;border-color:#A5D6A7;' : 'background:#fff5f5;border-color:#EF9A9A;')
           : '';
+        const scoreData = getScore(name);
+        const thruVal = scoreData.thru || '';
+        const teeTime = scoreData.teeTime || '';
+        let thruLabel = '';
+        if (cut) {
+          thruLabel = '';
+        } else if (thruVal === 'F') {
+          thruLabel = 'F';
+        } else if (thruVal && thruVal !== '') {
+          thruLabel = 'Thru ' + thruVal;
+        } else if (teeTime) {
+          thruLabel = teeTime;
+        }
         h+=`<div class="pick-item" style="${bgStyle}">
-          <div><div class="pick-name">${name}</div><div class="pick-salary">$${getSalary(name).toLocaleString()}</div></div>
-          <div class="pick-score ${toPar!==null?sc(toPar):'even'}">${cut?'CUT':toPar!==null?fmt(toPar):'—'}</div></div>`;
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:4px">
+              <div class="pick-name">${name}</div>
+              <div class="pick-score ${toPar!==null?sc(toPar):'even'}" style="flex-shrink:0">${cut?'CUT':toPar!==null?fmt(toPar):'—'}</div>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <div class="pick-salary">$${getSalary(name).toLocaleString()}</div>
+              ${hasScores&&thruLabel?`<div style="font-size:10px;color:#888">${thruLabel}</div>`:''}
+            </div>
+          </div>
+        </div>`;
       });
       h+=`</div>${hasScores && entry.total !== null ? '<div style="font-size:11px;color:#666;margin-top:8px"><span style="color:#2E7D32">&#9632;</span> Green = counting &nbsp; <span style="color:#C0392B">&#9632;</span> Red = not counting or cut</div>' : ''}</div></td></tr>`;
     }
