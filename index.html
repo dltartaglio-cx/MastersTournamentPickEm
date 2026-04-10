@@ -460,10 +460,14 @@ async function fetchScores() {
         if(v&&v!=='--'){if(v==='E')today=0;else{const n=parseInt(v);if(!isNaN(n))today=n;}break;}
       }
       const sd=c.status?.displayValue||'';
+      const detail=c.status?.detail||'';
       const thru=sd==='F'||sd==='Final'?'F':/^\d+$/.test(sd)?sd:'';
-      // Tee time: ESPN puts '10:35 AM' style in status.detail for players not yet started
-      const teeTimeRaw=c.status?.detail||c.teeTime||'';
-      const teeTime=/^\d{1,2}:\d{2}/.test(teeTimeRaw)?teeTimeRaw:(/^\d{1,2}:\d{2}/.test(sd)?sd:'');
+      // Tee time: check detail, displayValue, and top-level teeTime field for time patterns
+      const timePattern=/\d{1,2}:\d{2}/;
+      let teeTime='';
+      if(timePattern.test(detail)) teeTime=detail;
+      else if(timePattern.test(sd)&&thru==='') teeTime=sd;
+      else if(c.teeTime&&timePattern.test(String(c.teeTime))) teeTime=String(c.teeTime);
       const entry={toPar,cut,thru,today,espnName,teeTime};
       out[espnName]=entry;
       const sal=espnToSalary[espnName];
@@ -486,8 +490,12 @@ async function fetchScores() {
       const thruRaw=p.thru??p.hole??'';
       const thru=String(thruRaw==='18'||thruRaw===18?'F':thruRaw||'');
       const cut=!!(p.status==='C'||p.cut||p.missed_cut);
-      const teeTimeRaw=p.tee_time||p.teeTime||p.start_time||'';
-      const teeTime=teeTimeRaw?String(teeTimeRaw).replace(/^(\d{1,2}:\d{2}:\d{2}).*$/,'$1').replace(/:\d{2}$/,''):''; // strip seconds
+      const teeTimeRaw=p.tee_time||p.teeTime||p.start_time||p.teetime||p.tee||'';
+      // Strip seconds if HH:MM:SS, strip AM/PM timezone suffix for cleanliness
+      const teeTime=teeTimeRaw?String(teeTimeRaw)
+        .replace(/^(\d{1,2}:\d{2}:\d{2}).*$/,'$1')
+        .replace(/:(\d{2}):\d{2}$/,':$1')
+        .replace(/\s*(ET|EST|EDT|UTC|AM|PM).*$/i,'').trim():'';
       const entry={toPar,cut,thru,today,espnName:name,teeTime};
       out[name]=entry;
       const sal=espnToSalary[name];
@@ -593,7 +601,7 @@ function renderLeaderboard() {
   let h=`<div class="stats-row" style="grid-template-columns:repeat(3,1fr)">
     <div class="stat-card"><div class="stat-val">${submittedCount}</div><div class="stat-lbl">Entries</div></div>
     <div class="stat-card"><div class="stat-val">$${(submittedCount*50).toLocaleString()}</div><div class="stat-lbl">Prize Pool</div></div>
-    <div class="stat-card"><div class="stat-val">${hasScores?'Live':'—'}</div><div class="stat-lbl">${hasScores?getRoundLabel():'Scores'}</div></div>
+    <div class="stat-card"><div class="stat-val" style="${hasScores?'font-size:14px;line-height:1.2':''}">${hasScores?getRoundLabel():'—'}</div><div class="stat-lbl">${hasScores?'● Live':'Scores'}</div></div>
   </div>`;
   if(!pickCount){
     h+='<div class="card"><div class="empty-state">No picks submitted yet.</div></div>';
@@ -644,10 +652,13 @@ function renderLeaderboard() {
           thruLabel = '';
         } else if (thruVal === 'F') {
           thruLabel = 'F';
-        } else if (thruVal && thruVal !== '') {
+        } else if (thruVal && /^\d+$/.test(thruVal)) {
           thruLabel = 'Thru ' + thruVal;
         } else if (teeTime) {
           thruLabel = teeTime;
+        } else if (thruVal && thruVal !== 'F') {
+          // fallback: show whatever status text exists (may be a tee time string)
+          thruLabel = thruVal;
         }
         h+=`<div class="pick-item" style="${bgStyle}">
           <div style="flex:1;min-width:0">
