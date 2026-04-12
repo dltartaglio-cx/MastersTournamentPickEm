@@ -2228,7 +2228,28 @@ function toggleMastersAudio() {
 loadGolfers();
 loadDB();
 
-// Scores are frozen — tournament is complete. No live fetching.
+// Fetch scores on load, then refresh every 2 minutes
+(async function initScores() {
+  for(let attempt=1; attempt<=3; attempt++) {
+    await fetchScores();
+    if(Object.keys(state.scores).length > 0) break;
+    if(attempt < 3) await new Promise(r => setTimeout(r, 2000 * attempt));
+  }
+})();
+
+setInterval(fetchScores, 120000);
+
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'visible') {
+    const s = state.lastFetched ? (Date.now() - state.lastFetched.getTime()) / 1000 : 9999;
+    if(s > 30) fetchScores();
+  }
+});
+
+window.addEventListener('focus', ()=>{
+  const s = state.lastFetched ? (Date.now() - state.lastFetched.getTime()) / 1000 : 9999;
+  if(s > 30) fetchScores();
+});
 
 // ── 2026 Champion Celebration Modal ──────────────────────
 (function() {
