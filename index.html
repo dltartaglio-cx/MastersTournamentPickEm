@@ -35,6 +35,7 @@ h1{color:#1a1a1a;font-family:Georgia,serif;font-weight:400}
 .live-badge{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:500;color:#006B3F}
 .live-dot{width:7px;height:7px;background:#006B3F;border-radius:50%;animation:pulse 1.5s infinite;flex-shrink:0}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+@keyframes winner-blink{0%,100%{background:#C8E6C9}50%{background:#E8F5E9}}
 .refresh-btn{font-size:13px;padding:6px 12px;border:0.5px solid rgba(0,0,0,0.2);border-radius:6px;cursor:pointer;background:transparent;color:#666;touch-action:manipulation}
 .refresh-btn:hover{background:#fff}
 
@@ -670,6 +671,11 @@ function renderLeaderboard() {
   <div style="padding:0 8px"><table class="leaderboard-table"><thead><tr>
     <th style="width:36px">Pos</th><th>Participant</th><th class="right">Best 4 Score</th><th style="width:24px"></th>
   </tr></thead><tbody>`;
+  // True once Final Round is complete (dayOffset >= 3)
+  const _now2 = new Date();
+  const _ms2  = new Date('2026-04-09T00:00:00');
+  const isFinalComplete = Math.floor((_now2 - _ms2) / 86400000) >= 3;
+
   let rank=1;
   board.forEach((entry,idx)=>{
     const posClass=rank===1?'pos-1':rank===2?'pos-2':rank===3?'pos-3':'';
@@ -678,7 +684,9 @@ function renderLeaderboard() {
     const noPicks=!(entry.picks||[]).some(p=>p&&p.trim());
     const disp=noPicks?'—':(entry.total===null?(hasScores?'CUT':'—'):fmt(entry.total));
     if(idx>0&&board[idx-1].total!==entry.total) rank=idx+1;
-    h+=`<tr class="row-main" onclick="toggleRow('${entry.id}')">
+    const _isWinner = isFinalComplete && rank===1 && entry.total!==null && idx===0;
+    const _winnerStyle = _isWinner ? 'animation:winner-blink 2s ease-in-out infinite;' : '';
+    h+=`<tr class="row-main" style="${_winnerStyle}" onclick="toggleRow('${entry.id}')">
       <td class="pos-cell ${posClass}">${entry.total===null?'—':rank}</td>
       <td class="name-cell">${entry.name}${jacketsForWinner(entry.past_winner||'')}</td>
       <td class="score-cell ${entry.total!==null?sc(entry.total):'even'}">${disp}</td>
