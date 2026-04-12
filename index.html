@@ -258,7 +258,7 @@ function genPw() {
 // ── State ─────────────────────────────────────────────────
 let state = {
   tab: 'leaderboard',
-  scores: {}, scoresLoading: false, scoresError: null, lastFetched: null, frozenCutLine: null,
+  scores: {}, scoresLoading: false, scoresError: null, lastFetched: null, frozenCutLine: 4,
   // DB data
   participants: [],   // array of row objects from supabase
   settings: { submissions_open: false },
@@ -541,16 +541,6 @@ async function fetchScores() {
       if(scores){
         if(isMasters) buildNameMap(Object.keys(scores));
         state.scores=scores; state.lastFetched=new Date();
-        // Freeze the cut line once R3/R4 starts — it never changes after the cut is made
-        if (state.frozenCutLine === null) {
-          const _now = new Date();
-          const _mastersStart = new Date('2026-04-09T00:00:00');
-          const _dayOffset = Math.floor((_now - _mastersStart) / 86400000);
-          if (_dayOffset >= 2) {
-            const madeCut = Object.values(scores).filter(s => s.toPar !== null && !s.cut).map(s => s.toPar);
-            if (madeCut.length) state.frozenCutLine = Math.max(...madeCut);
-          }
-        }
         state.scoresLoading=false; render(); return;
       }
       lastErr='No competitor data from '+url;
@@ -583,8 +573,7 @@ function getCutInfo() {
   const cutHappened = dayOffset >= 2;
 
   if (cutHappened) {
-    // Cut is done — use the frozen value captured at end of R2 (never recalculates)
-    if (state.frozenCutLine === null) return null;
+    // Cut is done — hardcoded at +4 (official 2026 Masters cut line)
     return { label: 'Cut Line', score: state.frozenCutLine };
   }
 
@@ -669,7 +658,7 @@ function renderLeaderboard() {
   </div>`;
   if(!pickCount){
     h+='<div class="card"><div class="empty-state">No picks submitted yet.</div></div>';
-    if(!hasScores&&!state.scoresLoading) h+=`<div style="text-align:center;padding:8px"><button class="btn btn-primary" onclick="fetchScores()">Load Live Scores</button></div>`;
+    
     return h;
   }
   h+=`<div class="card" style="padding:0">
@@ -741,7 +730,7 @@ function renderLeaderboard() {
     }
   });
   h+='</tbody></table></div></div>';
-  if(!hasScores&&!state.scoresLoading) h+=`<div style="text-align:center;padding:8px"><button class="btn btn-primary" onclick="fetchScores()">Load Live Scores</button></div>`;
+  
   if(state.scoresLoading) h+='<div class="loading">Fetching scores…</div>';
   if(state.scoresError) h+=`<div style="font-size:12px;color:#C0392B;text-align:center;padding:8px">${state.scoresError}</div>`;
   return h;
@@ -749,7 +738,7 @@ function renderLeaderboard() {
 
 // ── Render: Golfers ───────────────────────────────────────
 function renderGolfers() {
-  if(!Object.keys(state.scores).length) return `<div class="card"><div class="empty-state">No scores loaded.<br><button class="btn btn-primary" style="margin-top:12px" onclick="fetchScores()">Load Live Scores</button></div></div>`;
+  if(!Object.keys(state.scores).length) return `<div class="card"><div class="empty-state">Scores not available.</div></div>`;
 
   // Deduplicate: only keep ESPN names (each golfer once, highest-priority entry)
   const seen=new Set();
@@ -2239,36 +2228,130 @@ function toggleMastersAudio() {
 loadGolfers();
 loadDB();
 
-// Fetch scores immediately on load, retry up to 3 times if it fails
-(async function initScores() {
-  for(let attempt=1; attempt<=3; attempt++) {
-    await fetchScores();
-    if(Object.keys(state.scores).length > 0) break;
-    if(attempt < 3) await new Promise(r => setTimeout(r, 2000 * attempt));
+// Scores are frozen — tournament is complete. No live fetching.
+
+// ── 2026 Champion Celebration Modal ──────────────────────
+(function() {
+  const WINNER = 'Winner — Brandon Lee';
+  const YEAR = '2026';
+
+  function showChampionModal() {
+    // Don\'t show if already dismissed this session
+    const overlay = document.createElement('div');
+    overlay.id = 'champion-modal-overlay';
+    overlay.style.cssText = [
+      'position:fixed','top:0','left:0','width:100%','height:100%',
+      'background:rgba(0,0,0,0.72)','z-index:9999',
+      'display:flex','align-items:center','justify-content:center',
+      'cursor:pointer','backdrop-filter:blur(3px)',
+    ].join(';');
+
+    overlay.innerHTML = `
+      <div id="champion-modal" style="
+        background: #f9f9f9;
+        border-radius: 20px;
+        padding: 36px 40px 40px;
+        max-width: 340px;
+        width: 88%;
+        text-align: center;
+        box-shadow: 0 24px 80px rgba(0,0,0,0.6), 0 0 0 1.5px rgba(0,107,63,0.3);
+        cursor: default;
+        overflow: hidden;
+        position: relative;
+      ">
+        <!-- Gold shimmer bar -->
+        <div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#8B6914,#F6E300,#C9A84C,#F6E300,#8B6914)"></div>
+
+        <!-- Congratulations — top line -->
+        <div id="cham-congrats" style="
+          font-family:Georgia,serif; font-size:26px; font-weight:700;
+          color:#006B3F; text-shadow: 0 2px 8px rgba(0,107,63,0.15);
+          margin-bottom:8px;
+          opacity:0; transform:translateY(-12px);
+          transition: opacity 0.5s ease 0.1s, transform 0.5s ease 0.1s;
+        ">Congratulations!</div>
+
+        <!-- Winner name — below Congratulations -->
+        <div id="cham-winner" style="
+          font-family:Georgia,serif; font-size:16px; font-weight:500;
+          color:#1a1a1a; letter-spacing:0.5px; margin-bottom:16px;
+          opacity:0; transform:translateY(-8px);
+          transition: opacity 0.5s ease 0.3s, transform 0.5s ease 0.3s;
+        ">${WINNER}</div>
+
+        <!-- Jacket SVG — large version -->
+        <div id="cham-jacket" style="
+          margin: 0 auto 20px;
+          opacity:0; transform:scale(0.6);
+          transition: opacity 0.6s ease 0.55s, transform 0.6s cubic-bezier(0.175,0.885,0.32,1.275) 0.55s;
+        ">
+          <svg width="130" height="145" viewBox="0 0 40 44" xmlns="http://www.w3.org/2000/svg">
+            <path d="M0,12 L8,9 L11,18 L11,30 L0,30 Z" fill="#1D6B35"/>
+            <path d="M40,12 L32,9 L29,18 L29,30 L40,30 Z" fill="#1D6B35"/>
+            <path d="M1,14 L7,11 L9,17 L2,17 Z" fill="#228B45" opacity="0.5"/>
+            <path d="M39,14 L33,11 L31,17 L38,17 Z" fill="#228B45" opacity="0.5"/>
+            <path d="M8,9 L15,7 L15,42 L0,42 L0,30 L11,30 L11,18 Z" fill="#1D6B35"/>
+            <path d="M32,9 L25,7 L25,42 L40,42 L40,30 L29,30 L29,18 Z" fill="#1D6B35"/>
+            <rect x="15" y="9" width="10" height="33" fill="#175c2a"/>
+            <path d="M15,7 L20,15 L15,42 Z" fill="#145224"/>
+            <path d="M25,7 L20,15 L25,42 Z" fill="#145224"/>
+            <path d="M15,7 L20,12 L25,7 L22,5 L20,7 L18,5 Z" fill="#0f3d1c"/>
+            <rect x="2" y="30" width="36" height="12" rx="2" fill="#0a2e14"/>
+            <text x="20" y="40" text-anchor="middle" font-family="Georgia,'Times New Roman',serif" font-size="10" font-weight="700" fill="#F5C518" letter-spacing="0.8">${YEAR}</text>
+          </svg>
+        </div>
+
+        <!-- Masters Tournament Challenge — below jacket -->
+        <div id="cham-year" style="
+          font-family:Georgia,serif; font-size:13px; font-weight:700;
+          color:#006B3F; letter-spacing:2px; margin-top:4px;
+          opacity:0; transform:translateY(12px);
+          transition: opacity 0.5s ease 1s, transform 0.5s ease 1s;
+        ">Masters Tournament Challenge</div>
+
+        <!-- Countdown bar -->
+        <div style="margin-top:24px;height:3px;background:rgba(0,0,0,0.1);border-radius:2px;overflow:hidden">
+          <div id="cham-bar" style="height:100%;width:100%;background:rgba(246,227,0,0.6);border-radius:2px;
+            transition:width 7.5s linear;"></div>
+        </div>
+        <div style="font-size:11px;color:rgba(0,0,0,0.35);margin-top:6px">Click anywhere to close</div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    // Animate in
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        document.getElementById('cham-year').style.opacity    = '1';
+        document.getElementById('cham-year').style.transform  = 'translateY(0)';
+        document.getElementById('cham-jacket').style.opacity  = '1';
+        document.getElementById('cham-jacket').style.transform = 'scale(1)';
+        document.getElementById('cham-congrats').style.opacity = '1';
+        document.getElementById('cham-congrats').style.transform = 'translateY(0)';
+        document.getElementById('cham-winner').style.opacity  = '1';
+        document.getElementById('cham-winner').style.transform = 'translateY(0)';
+        // Start countdown bar shrink
+        setTimeout(() => { document.getElementById('cham-bar').style.width = '0%'; }, 50);
+      });
+    });
+
+    function dismiss() {
+      overlay.style.transition = 'opacity 0.4s ease';
+      overlay.style.opacity = '0';
+      setTimeout(() => { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }, 400);
+    }
+
+    // Close on overlay click (not modal click)
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) dismiss(); });
+
+    // Auto-close after 5 seconds
+    setTimeout(dismiss, 7500);
   }
+
+  // Show after a short delay so the page renders first
+  setTimeout(showChampionModal, 800);
 })();
-
-// Auto-refresh every 2 minutes while app is open
-setInterval(fetchScores, 120000);
-
-// Re-fetch immediately whenever the user returns to this tab/window
-document.addEventListener('visibilitychange', ()=>{
-  if(document.visibilityState === 'visible') {
-    const secondsSinceLastFetch = state.lastFetched
-      ? (Date.now() - state.lastFetched.getTime()) / 1000
-      : 9999;
-    // Only re-fetch if more than 30s have passed since last successful fetch
-    if(secondsSinceLastFetch > 30) fetchScores();
-  }
-});
-
-// Also re-fetch when the window regains focus (covers switching apps on mobile)
-window.addEventListener('focus', ()=>{
-  const secondsSinceLastFetch = state.lastFetched
-    ? (Date.now() - state.lastFetched.getTime()) / 1000
-    : 9999;
-  if(secondsSinceLastFetch > 30) fetchScores();
-});
 
 // Check URL params for direct participant login link (?email=...)
 (function(){
