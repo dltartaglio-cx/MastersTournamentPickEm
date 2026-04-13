@@ -267,7 +267,7 @@ let state = {
   // Admin
   adminLoggedIn: false, adminPass: '', adminPassError: '',
   adminSubTab: 'participants',
-  historyData: null, historyLoading: false, saveResultsMsg: '',
+  historyData: null, historyLoading: false, saveResultsMsg: '', expandedHistoryYears: new Set(),
   insights: [],
   editingParticipant: null, editPicks: ['','','','','',''],
   addUserName: '', addUserEmail: '', addUserError: '', addUserSuccess: '',
@@ -1511,7 +1511,13 @@ function renderTableOnly() {
 // ── Main render ───────────────────────────────────────────
 function render() {
   const root=document.getElementById('app-root');
-  const tabs=[['leaderboard','🏌️ Leaderboard'],['golfers','⛳ Scores'],['history','🏆 History'],['rules','📝 Rules']];
+  const _tabNow = new Date();
+  const _tabStart = new Date('2026-04-09T00:00:00');
+  const _tabOffset = Math.floor((_tabNow - _tabStart) / 86400000);
+  const _tournamentLive = _tabOffset >= 0 && _tabOffset <= 3;
+  const tabs = _tournamentLive
+    ? [['leaderboard','🏌️ Leaderboard'],['golfers','⛳ Scores'],['rules','📝 Rules']]
+    : [['leaderboard','🏌️ Leaderboard'],['history','🏆 History'],['rules','📝 Rules']];
   let h=`<div class="tabs">`;
   tabs.forEach(([t,l])=>{h+=`<button class="tab ${state.tab===t?'active':''}" onclick="setTab('${t}')">${l}</button>`;});
   h+='</div>';
@@ -1633,18 +1639,53 @@ async function loadHistory() {
   state.historyLoading = false; render();
 }
 
+function toggleHistoryYear(year) {
+  if (state.expandedHistoryYears.has(year)) state.expandedHistoryYears.delete(year);
+  else state.expandedHistoryYears.add(year);
+  render();
+}
+
 function renderHistory() {
   if (state.historyData === null && !state.historyLoading) loadHistory();
   if (state.historyLoading) return '<div class="loading">Loading history...</div>';
   const data = state.historyData || [];
   if (!data.length) return `<div class="card"><div class="empty-state">No historical results saved yet.<br><span style="font-size:13px;color:#aaa">After the tournament ends, an admin can save results from the Admin → Save Results tab.</span></div></div>`;
 
-  // Group by year
+  const fmtScore = n => n===null?'—':n===0?'E':n>0?'+'+n:''+n;
+  const scoreColor = (n,cut) => cut?'#C0392B':n<0?'#1B5E20':n>0?'#C0392B':'#555';
+
   const years = [...new Set(data.map(r => r.year))];
   let h = '';
+
   years.forEach(year => {
-    const rows = data.filter(r => r.year === year);
+    const rows = data.filter(r => r.year === year).sort((a,b) => a.rank - b.rank);
+    const winner = rows.find(r => r.rank === 1);
+    const others = rows.filter(r => r.rank !== 1);
+    const isExpanded = state.expandedHistoryYears.has(year);
+
+    const renderRow = (r, i, isWinner) => {
+      const pickScores = (() => { try { return JSON.parse(r.pick_scores||'[]'); } catch(e) { return []; } })();
+      const bg = isWinner ? 'background:#E8F5E9;' : (i%2===0?'':'background:#fafaf8;');
+      return `<tr style="${bg}">
+        <td style="padding:8px 10px;font-size:13px;font-weight:600;color:${r.rank===1?'#C9A84C':r.rank<=3?'#006B3F':'#666'};border-right:1px solid #e8e0c8;width:36px">
+          ${r.rank===1?'🏆':r.rank}
+        </td>
+        <td style="padding:8px 10px;font-size:13px;font-weight:${isWinner?'700':'500'};color:#1a1a1a;border-right:1px solid #e8e0c8">
+          ${r.participant_name}${isWinner?' <span style="font-size:10px;background:#C9A84C;color:#fff;padding:1px 5px;border-radius:3px;font-weight:700;margin-left:4px">WINNER</span>':''}
+        </td>
+        <td style="padding:8px 10px;font-size:11px;color:#555;border-right:1px solid #e8e0c8;line-height:1.8">
+          ${pickScores.map(p=>`<span style="display:inline-block;margin-right:8px;white-space:nowrap">
+            ${p.name} <span style="font-weight:600;color:${scoreColor(p.toPar,p.cut)}">${p.cut?'CUT':fmtScore(p.toPar)}</span>
+          </span>`).join('')}
+        </td>
+        <td style="padding:8px 10px;font-size:14px;font-weight:700;text-align:right;color:${r.total<0?'#1B5E20':r.total>0?'#C0392B':'#1a1a1a'}">
+          ${fmtScore(r.total)}
+        </td>
+      </tr>`;
+    };
+
     h += `<div class="card" style="padding:0;margin-bottom:1rem">
+      <!-- Header -->
       <div style="background:linear-gradient(135deg,#006B3F,#1D6B35);padding:12px 16px;border-radius:12px 12px 0 0;display:flex;align-items:center;gap:10px">
         <svg width="22" height="24" viewBox="0 0 40 44" xmlns="http://www.w3.org/2000/svg">
           <path d="M0,12 L8,9 L11,18 L11,30 L0,30 Z" fill="#228B45"/>
@@ -1656,47 +1697,41 @@ function renderHistory() {
           <path d="M25,7 L20,15 L25,42 Z" fill="#145224"/>
           <path d="M15,7 L20,12 L25,7 L22,5 L20,7 L18,5 Z" fill="#0f3d1c"/>
         </svg>
-        <span style="font-family:Georgia,serif;font-size:18px;font-weight:700;color:#F6E300">${year} Masters Tournament Challenge</span>
+        <span style="font-family:Georgia,serif;font-size:18px;font-weight:700;color:#F6E300;flex:1">${year} Masters Tournament Challenge</span>
       </div>
+
+      <!-- Winner row always visible -->
       <div style="overflow-x:auto">
-      <table class="leaderboard-table" style="min-width:500px">
+      <table class="leaderboard-table" style="min-width:480px">
         <thead><tr>
           <th style="width:36px">Pos</th>
           <th>Participant</th>
           <th>Picks</th>
-          <th class="right" style="width:80px">Score</th>
+          <th class="right" style="width:70px">Score</th>
         </tr></thead>
         <tbody>
-        ${rows.map((r,i) => {
-          const picks = (() => { try { return JSON.parse(r.picks||'[]'); } catch(e) { return []; } })();
-          const pickScores = (() => { try { return JSON.parse(r.pick_scores||'[]'); } catch(e) { return []; } })();
-          const isWinner = r.rank === 1;
-          const bg = isWinner ? 'background:#E8F5E9;' : (i%2===0?'':'background:#fafaf8;');
-          return `<tr style="${bg}">
-            <td style="padding:8px 10px;font-size:13px;font-weight:600;color:${r.rank===1?'#C9A84C':r.rank<=3?'#006B3F':'#666'};border-right:1px solid #e8e0c8">
-              ${r.rank===1?'🏆':r.rank}
-            </td>
-            <td style="padding:8px 10px;font-size:13px;font-weight:${isWinner?'700':'500'};color:#1a1a1a;border-right:1px solid #e8e0c8">
-              ${r.participant_name}${isWinner?' <span style="font-size:10px;background:#C9A84C;color:#fff;padding:1px 5px;border-radius:3px;font-weight:700">WINNER</span>':''}
-            </td>
-            <td style="padding:8px 10px;font-size:11px;color:#555;border-right:1px solid #e8e0c8;line-height:1.6">
-              ${pickScores.map(p=>`<span style="display:inline-block;margin-right:6px;white-space:nowrap">
-                ${p.name} <span style="font-weight:600;color:${p.cut?'#C0392B':p.toPar<0?'#1B5E20':p.toPar>0?'#555':'#555'}">${p.cut?'CUT':p.toPar===null?'—':p.toPar===0?'E':p.toPar>0?'+'+p.toPar:''+p.toPar}</span>
-              </span>`).join('')}
-            </td>
-            <td style="padding:8px 10px;font-size:14px;font-weight:700;text-align:right;color:${r.total<0?'#C0392B':r.total>0?'#1B5E20':'#1a1a1a'}">
-              ${r.total===null?'—':r.total===0?'E':r.total>0?'+'+r.total:''+r.total}
-            </td>
-          </tr>`;
-        }).join('')}
+          ${winner ? renderRow(winner, 0, true) : ''}
+          ${isExpanded ? others.map((r,i) => renderRow(r, i+1, false)).join('') : ''}
         </tbody>
       </table>
       </div>
+
+      <!-- Expand / collapse toggle -->
+      ${others.length > 0 ? `
+      <div onclick="toggleHistoryYear(${year})" style="
+        padding:10px 16px;text-align:center;font-size:13px;color:#006B3F;
+        font-weight:600;cursor:pointer;border-top:0.5px solid rgba(0,0,0,0.08);
+        background:#fafaf8;border-radius:0 0 12px 12px;
+        display:flex;align-items:center;justify-content:center;gap:6px
+      ">
+        ${isExpanded
+          ? `&#9650; Hide other participants`
+          : `&#9660; Show all ${others.length} other participant${others.length===1?'':'s'}`}
+      </div>` : ''}
     </div>`;
   });
   return h;
 }
-
 function setTab(t){state.tab=t;state.myPicksSaved=false;render();}
 function toggleRow(id){state.expandedRows.has(id)?state.expandedRows.delete(id):state.expandedRows.add(id);render();}
 function switchAuth(v){state.authView=v;state.authError='';state.authSuccess='';render();}
