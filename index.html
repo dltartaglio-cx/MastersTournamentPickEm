@@ -267,6 +267,7 @@ let state = {
   // Admin
   adminLoggedIn: false, adminPass: '', adminPassError: '',
   adminSubTab: 'participants',
+  historyData: null, historyLoading: false, saveResultsMsg: '',
   insights: [],
   editingParticipant: null, editPicks: ['','','','','',''],
   addUserName: '', addUserEmail: '', addUserError: '', addUserSuccess: '',
@@ -984,7 +985,7 @@ function renderAdmin() {
   const sub=state.adminSubTab;
   let h=`<div class="admin-panel">
   <div style="display:flex;gap:6px;margin-bottom:12px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px">
-    ${[['participants','Participants'],['golfers','Salaries'],['settings','Settings'],['insights','📊 Insights']].map(([t,l])=>`
+    ${[['participants','Participants'],['golfers','Salaries'],['settings','Settings'],['insights','📊 Insights'],['results','💾 Save Results']].map(([t,l])=>`
       <button class="btn ${sub===t?'btn-primary':'btn-secondary'}" style="font-size:13px;padding:8px 14px;white-space:nowrap;flex-shrink:0" onclick="state.adminSubTab='${t}';state.editingParticipant=null;render()">${l}</button>
     `).join('')}
     <button class="btn btn-secondary" style="font-size:13px;padding:8px 14px;flex-shrink:0;color:#C0392B;margin-left:auto;white-space:nowrap" onclick="state.adminLoggedIn=false;render()">Sign Out</button>
@@ -992,6 +993,7 @@ function renderAdmin() {
   if(sub==='settings') h+=renderAdminSettings();
   else if(sub==='golfers') h+=renderGolferManager();
   else if(sub==='insights') h+=renderInsights();
+  else if(sub==='results') h+=renderSaveResults();
   else h+=renderParticipants();
   return h+'</div>';
 }
@@ -1509,7 +1511,7 @@ function renderTableOnly() {
 // ── Main render ───────────────────────────────────────────
 function render() {
   const root=document.getElementById('app-root');
-  const tabs=[['leaderboard','🏌️ Leaderboard'],['golfers','⛳ Scores'],['rules','📝 Rules']];
+  const tabs=[['leaderboard','🏌️ Leaderboard'],['golfers','⛳ Scores'],['history','🏆 History'],['rules','📝 Rules']];
   let h=`<div class="tabs">`;
   tabs.forEach(([t,l])=>{h+=`<button class="tab ${state.tab===t?'active':''}" onclick="setTab('${t}')">${l}</button>`;});
   h+='</div>';
@@ -1517,6 +1519,7 @@ function render() {
   else if(state.tab==='golfers') h+=renderGolfers();
   else if(state.tab==='mypicks') h+=renderMyPicks();
   else if(state.tab==='admin') h+=renderAdmin();
+  else if(state.tab==='history') h+=renderHistory();
   else h+=renderRules();
 
   // Participant delete confirm modal
@@ -1551,6 +1554,149 @@ function render() {
 }
 
 // ── Actions ───────────────────────────────────────────────
+// ── Save Tournament Results (Admin) ─────────────────────
+function renderSaveResults() {
+  const board = buildLeaderboard().filter(p => (p.picks||[]).some(x=>x&&x.trim()));
+  const hasScores = Object.keys(state.scores).length > 0;
+  const year = new Date().getFullYear();
+  let rank = 1;
+  const rows = board.map((entry, idx) => {
+    if (idx > 0 && board[idx-1].total !== entry.total) rank = idx + 1;
+    const pickScores = (entry.picks||[]).filter(p=>p&&p.trim()).map(name => {
+      const s = getScore(name);
+      return { name, toPar: s.toPar, cut: s.cut };
+    });
+    const r = rank;
+    return { name: entry.name, email: entry.email||'', rank: r, total: entry.total,
+             picks: entry.picks||[], pickScores, year };
+  });
+
+  return `<div class="card">
+    <h3 style="font-size:16px;font-weight:600;color:#006B3F;margin-bottom:8px">💾 Save Tournament Results</h3>
+    <p style="font-size:13px;color:#666;margin-bottom:12px">
+      Saves the current leaderboard & scores to the database permanently as the <strong>${year}</strong> results.
+      Run this once when the tournament is complete.
+    </p>
+    ${!hasScores ? '<div class="danger-banner">No scores loaded — load scores first before saving.</div>' : ''}
+    <div style="background:#f5f4ef;border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:#555;max-height:200px;overflow-y:auto">
+      ${rows.map(r=>`<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:0.5px solid rgba(0,0,0,0.06)">
+        <span>#${r.rank} ${r.name}</span>
+        <span style="font-weight:600;color:#006B3F">${r.total===null?'—':fmt(r.total)}</span>
+      </div>`).join('')}
+    </div>
+    <button class="btn btn-primary" style="width:100%" onclick="saveTournamentResults(${year})" ${!hasScores?'disabled':''}>
+      Save ${year} Results to Database
+    </button>
+    ${state.saveResultsMsg ? `<div class="${state.saveResultsMsg.startsWith('✓')?'success-msg':'danger-banner'}" style="margin-top:10px">${state.saveResultsMsg}</div>` : ''}
+  </div>`;
+}
+
+async function saveTournamentResults(year) {
+  const board = buildLeaderboard().filter(p => (p.picks||[]).some(x=>x&&x.trim()));
+  let rank = 1;
+  const rows = board.map((entry, idx) => {
+    if (idx > 0 && board[idx-1].total !== entry.total) rank = idx + 1;
+    const pickScores = (entry.picks||[]).filter(p=>p&&p.trim()).map(name => {
+      const s = getScore(name);
+      return { name, toPar: s.toPar, cut: s.cut };
+    });
+    return {
+      year,
+      participant_name: entry.name,
+      participant_email: entry.email||'',
+      rank,
+      total: entry.total,
+      picks: JSON.stringify(entry.picks||[]),
+      pick_scores: JSON.stringify(pickScores),
+      scores_snapshot: JSON.stringify(state.scores),
+    };
+  });
+  try {
+    // Delete existing records for this year first
+    await sb(`tournament_results?year=eq.${year}`, {method:'DELETE', prefer:'return=minimal'});
+    // Insert all rows
+    await sb('tournament_results', {method:'POST', body: rows, prefer:'return=minimal'});
+    state.saveResultsMsg = `✓ Saved ${rows.length} results for ${year}`;
+  } catch(e) {
+    state.saveResultsMsg = '✗ Error: ' + e.message;
+  }
+  render();
+}
+
+// ── History Tab ──────────────────────────────────────────
+async function loadHistory() {
+  state.historyLoading = true; render();
+  try {
+    const data = await sb('tournament_results?order=year.desc,rank.asc') || [];
+    state.historyData = data;
+  } catch(e) { state.historyData = []; }
+  state.historyLoading = false; render();
+}
+
+function renderHistory() {
+  if (state.historyData === null && !state.historyLoading) loadHistory();
+  if (state.historyLoading) return '<div class="loading">Loading history...</div>';
+  const data = state.historyData || [];
+  if (!data.length) return `<div class="card"><div class="empty-state">No historical results saved yet.<br><span style="font-size:13px;color:#aaa">After the tournament ends, an admin can save results from the Admin → Save Results tab.</span></div></div>`;
+
+  // Group by year
+  const years = [...new Set(data.map(r => r.year))];
+  let h = '';
+  years.forEach(year => {
+    const rows = data.filter(r => r.year === year);
+    h += `<div class="card" style="padding:0;margin-bottom:1rem">
+      <div style="background:linear-gradient(135deg,#006B3F,#1D6B35);padding:12px 16px;border-radius:12px 12px 0 0;display:flex;align-items:center;gap:10px">
+        <svg width="22" height="24" viewBox="0 0 40 44" xmlns="http://www.w3.org/2000/svg">
+          <path d="M0,12 L8,9 L11,18 L11,30 L0,30 Z" fill="#228B45"/>
+          <path d="M40,12 L32,9 L29,18 L29,30 L40,30 Z" fill="#228B45"/>
+          <path d="M8,9 L15,7 L15,42 L0,42 L0,30 L11,30 L11,18 Z" fill="#228B45"/>
+          <path d="M32,9 L25,7 L25,42 L40,42 L40,30 L29,30 L29,18 Z" fill="#228B45"/>
+          <rect x="15" y="9" width="10" height="33" fill="#1a5c2a"/>
+          <path d="M15,7 L20,15 L15,42 Z" fill="#145224"/>
+          <path d="M25,7 L20,15 L25,42 Z" fill="#145224"/>
+          <path d="M15,7 L20,12 L25,7 L22,5 L20,7 L18,5 Z" fill="#0f3d1c"/>
+        </svg>
+        <span style="font-family:Georgia,serif;font-size:18px;font-weight:700;color:#F6E300">${year} Masters Tournament Challenge</span>
+      </div>
+      <div style="overflow-x:auto">
+      <table class="leaderboard-table" style="min-width:500px">
+        <thead><tr>
+          <th style="width:36px">Pos</th>
+          <th>Participant</th>
+          <th>Picks</th>
+          <th class="right" style="width:80px">Score</th>
+        </tr></thead>
+        <tbody>
+        ${rows.map((r,i) => {
+          const picks = (() => { try { return JSON.parse(r.picks||'[]'); } catch(e) { return []; } })();
+          const pickScores = (() => { try { return JSON.parse(r.pick_scores||'[]'); } catch(e) { return []; } })();
+          const isWinner = r.rank === 1;
+          const bg = isWinner ? 'background:#E8F5E9;' : (i%2===0?'':'background:#fafaf8;');
+          return `<tr style="${bg}">
+            <td style="padding:8px 10px;font-size:13px;font-weight:600;color:${r.rank===1?'#C9A84C':r.rank<=3?'#006B3F':'#666'};border-right:1px solid #e8e0c8">
+              ${r.rank===1?'🏆':r.rank}
+            </td>
+            <td style="padding:8px 10px;font-size:13px;font-weight:${isWinner?'700':'500'};color:#1a1a1a;border-right:1px solid #e8e0c8">
+              ${r.participant_name}${isWinner?' <span style="font-size:10px;background:#C9A84C;color:#fff;padding:1px 5px;border-radius:3px;font-weight:700">WINNER</span>':''}
+            </td>
+            <td style="padding:8px 10px;font-size:11px;color:#555;border-right:1px solid #e8e0c8;line-height:1.6">
+              ${pickScores.map(p=>`<span style="display:inline-block;margin-right:6px;white-space:nowrap">
+                ${p.name} <span style="font-weight:600;color:${p.cut?'#C0392B':p.toPar<0?'#1B5E20':p.toPar>0?'#555':'#555'}">${p.cut?'CUT':p.toPar===null?'—':p.toPar===0?'E':p.toPar>0?'+'+p.toPar:''+p.toPar}</span>
+              </span>`).join('')}
+            </td>
+            <td style="padding:8px 10px;font-size:14px;font-weight:700;text-align:right;color:${r.total<0?'#C0392B':r.total>0?'#1B5E20':'#1a1a1a'}">
+              ${r.total===null?'—':r.total===0?'E':r.total>0?'+'+r.total:''+r.total}
+            </td>
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table>
+      </div>
+    </div>`;
+  });
+  return h;
+}
+
 function setTab(t){state.tab=t;state.myPicksSaved=false;render();}
 function toggleRow(id){state.expandedRows.has(id)?state.expandedRows.delete(id):state.expandedRows.add(id);render();}
 function switchAuth(v){state.authView=v;state.authError='';state.authSuccess='';render();}
